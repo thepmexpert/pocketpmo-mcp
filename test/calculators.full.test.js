@@ -215,6 +215,23 @@ test('runMonteCarlo: iterations validation', () => {
   );
 });
 
+test('runMonteCarlo: duplicate activity ids are reported, never silent', () => {
+  // Two activities share id 'a' and 'b' references 'a'. Last-write-wins map
+  // resolution makes the network ambiguous; the response must carry the
+  // warning instead of silently returning incoherent stats (issue #4).
+  const r = runMonteCarlo({
+    activities: [
+      { id: 'a', duration: 3, predecessors: [] },
+      { id: 'a', duration: 9, predecessors: [] },
+      { id: 'b', duration: 2, predecessors: ['a'] }
+    ],
+    iterations: 500
+  });
+  const dup = r.issues.find((i) => i.field === 'id' && /duplicate/.test(i.message));
+  assert.ok(dup, 'duplicate id must produce an issue, got: ' + JSON.stringify(r.issues));
+  assert.equal(dup.activityId, 'a');
+});
+
 test('runMonteCarlo: the dominant branch owns the critical path', () => {
   const acts = [
     { id: 'tiny', duration: 1, predecessors: [] },
