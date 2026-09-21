@@ -1,0 +1,18 @@
+README.md
+  h_bb77324e13b22c 1-123
+demo/demo.mjs
+  h_bb77324e13b22c 1-135
+server.js
+  h_bb77324e13b22c 126-127
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "df1602c83be3c787f52446381ace15b007f4b70e",
+  "prompts": {},
+  "humans": {
+    "h_bb77324e13b22c": {
+      "author": "David <david4david4david4@gmail.com>"
+    }
+  }
+}
