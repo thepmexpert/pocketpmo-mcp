@@ -168,6 +168,33 @@ test('runMonteCarlo: probability rises as target moves out', () => {
   assert.ok(probs[probs.length - 1] > 0.9); // 15 days is near-certain
 });
 
+test('runMonteCarlo: target probabilities agree with the simulated percentiles', () => {
+  // probabilityByTarget must describe the SAME distribution as
+  // mean/percentiles (simulated CPM durations). P(t <= p50) must be ~0.5
+  // regardless of network shape — the old PERT-sum approximation (sum of
+  // per-activity means/variances) ignored topology and contradicted the
+  // percentiles whenever parallel paths existed.
+  const acts = [
+    { id: 'start', duration: 1, predecessors: [] },
+    { id: 'long', duration: 10, predecessors: ['start'] },
+    { id: 'short', duration: 3, predecessors: ['start'] },
+    { id: 'end', duration: 1, predecessors: ['long', 'short'] }
+  ];
+  const first = runMonteCarlo({ activities: structuredClone(acts), iterations: 2000 });
+  const p50 = first.percentiles.p50;
+
+  // Seeded RNG → second run reproduces the same simulated durations.
+  const second = runMonteCarlo({
+    activities: structuredClone(acts),
+    iterations: 2000,
+    targets: [p50 - 0.5, p50, p50 + 0.5]
+  });
+  const [below, at, above] = second.probabilityByTarget.map((t) => t.probability);
+  assert.ok(at > 0.4 && at < 0.6, `P(finish <= p50) should be ~0.5, got ${at}`);
+  assert.ok(above > at, `P(<= p50+0.5) ${above} should exceed P(<= p50) ${at}`);
+  assert.ok(below < at, `P(<= p50-0.5) ${below} should be below P(<= p50) ${at}`);
+});
+
 test('runMonteCarlo: the dominant branch owns the critical path', () => {
   const acts = [
     { id: 'tiny', duration: 1, predecessors: [] },
