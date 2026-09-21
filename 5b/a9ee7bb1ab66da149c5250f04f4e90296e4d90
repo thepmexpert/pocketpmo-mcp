@@ -1,0 +1,26 @@
+.gitignore
+  h_bb77324e13b22c 1-3
+docs/2026-09-21-pmo-mcp-goal.md
+  h_bb77324e13b22c 1-53
+docs/2026-09-21-pmo-mcp-implementation-plan.md
+  h_bb77324e13b22c 1-212
+docs/2026-09-21-pmo-mcp-prd.md
+  h_bb77324e13b22c 1-149
+lib/calculators.js
+  h_bb77324e13b22c 1-479
+package.json
+  h_bb77324e13b22c 1-14
+test/calculators.test.js
+  h_bb77324e13b22c 1-78
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "5ba9ee7bb1ab66da149c5250f04f4e90296e4d90",
+  "prompts": {},
+  "humans": {
+    "h_bb77324e13b22c": {
+      "author": "David <david4david4david4@gmail.com>"
+    }
+  }
+}
