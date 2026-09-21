@@ -160,8 +160,12 @@ test('runMonteCarlo: the dominant branch owns the critical path', () => {
   ];
   const r = runMonteCarlo({ activities: acts, iterations: 500 });
   const byId = Object.fromEntries(r.criticalPathFrequency.map((c) => [c.id, c]));
-  assert.ok(byId.huge.share > 0.95, `huge should dominate, got ${byId.huge.share}`);
-  assert.ok(byId.short.share < 0.05, `short should rarely be critical, got ${byId.short.share}`);
+  // Chain members (tiny, huge, end) are on every critical path; the short
+  // branch is almost never critical with a 30-day giant beside it.
+  assert.ok(byId.tiny.share > 0.99, `tiny always critical, got ${byId.tiny.share}`);
+  assert.ok(byId.huge.share > 0.99, `huge always critical, got ${byId.huge.share}`);
+  const shortShare = byId.short ? byId.short.share : 0; // absent = never critical
+  assert.ok(shortShare < 0.05, `short should rarely be critical, got ${shortShare}`);
 });
 
 test('runMonteCarlo: invalid durations are reported, not silent', () => {
