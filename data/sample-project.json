@@ -1,0 +1,69 @@
+{
+  "id": 101,
+  "name": "Northgate Platform Migration",
+  "description": "Sample PocketPMO project: migration of the customer platform to the new cloud stack. Demonstrates the export-file schema consumed by pocketpmo-mcp.",
+  "status": "active",
+  "isActive": true,
+  "progress": 42,
+  "startDate": "2026-08-03",
+  "endDate": "2026-11-27",
+  "budget": 480000,
+  "spent": 203500,
+  "teamSize": 6,
+  "client": "Internal",
+  "manager": "D. Byrne",
+  "templateType": null,
+  "phases": [],
+  "activities": [
+    { "id": "a1", "name": "Discovery & requirements", "duration": 10, "predecessors": [] },
+    { "id": "a2", "name": "Target architecture design", "duration": 15, "predecessors": ["a1"] },
+    { "id": "a3", "name": "Data migration scripts", "duration": 20, "predecessors": ["a2"], "distribution": { "optimistic": 14, "mostLikely": 20, "pessimistic": 34 } },
+    { "id": "a4", "name": "Integration build", "duration": 30, "predecessors": ["a2"], "distribution": { "optimistic": 24, "mostLikely": 30, "pessimistic": 45 } },
+    { "id": "a5", "name": "UAT & defect fix window", "duration": 15, "predecessors": ["a3", "a4"], "distribution": { "optimistic": 10, "mostLikely": 15, "pessimistic": 25 } },
+    { "id": "a6", "name": "Cutover & hypercare", "duration": 5, "predecessors": ["a5"] }
+  ],
+  "pertData": {
+    "activities": []
+  },
+  "cpmData": {
+    "activities": []
+  },
+  "monteCarloData": {
+    "activities": [],
+    "distributions": {},
+    "simulationResults": null
+  },
+  "evmData": {
+    "projectBudget": 480000,
+    "inProgressValue": 50,
+    "startDate": "2026-08-03",
+    "plannedFinishDate": "2026-11-27",
+    "milestones": [
+      { "id": "m1", "name": "Architecture signed off", "percentage": 20, "cost": 96000, "progress": 1 },
+      { "id": "m2", "name": "Migration scripts complete", "percentage": 30, "cost": 150000, "progress": 0.1 },
+      { "id": "m3", "name": "Integration build complete", "percentage": 30, "cost": 140000, "progress": 0.1 },
+      { "id": "m4", "name": "Go-live", "percentage": 20, "cost": 94000, "progress": 0 }
+    ]
+  },
+  "costData": {
+    "expenses": [
+      { "id": "e1", "wbsCode": "a1", "amount": 62000, "date": "2026-08-14", "description": "Discovery phase actuals", "type": "actual" },
+      { "id": "e2", "wbsCode": "a2", "amount": 88000, "date": "2026-09-04", "description": "Architecture phase actuals", "type": "actual" },
+      { "id": "e3", "wbsCode": "a3", "amount": 53500, "date": "2026-09-18", "description": "Data migration WIP", "type": "committed" }
+    ],
+    "alerts": [],
+    "cbsCategories": ["Personnel", "Technology", "Marketing", "Operations", "Other"],
+    "monthlyBudget": []
+  },
+  "risks": [
+    { "id": "r1", "name": "Legacy data quality worse than assessed", "probability": 4, "impact": 4, "status": "open", "owner": "Migration lead", "mitigation": "Early profiling sprint; contingency on a3" },
+    { "id": "r2", "name": "Integration partner resource contention", "probability": 3, "impact": 3, "status": "open", "owner": "PM", "mitigation": "Reserved capacity agreement to end-Oct" },
+    { "id": "r3", "name": "UAT users unavailable during holiday window", "probability": 2, "impact": 4, "status": "monitoring", "owner": "PM", "mitigation": "Freeze cutover after 18 Dec" },
+    { "id": "r4", "name": "Cloud cost overrun on dual-run", "probability": 2, "impact": 2, "status": "closed", "owner": "Finance", "mitigation": "Reserved instances purchased" }
+  ],
+  "stakeholders": [],
+  "resources": [],
+  "tasks": [],
+  "teamMembers": [],
+  "tags": ["sample", "migration"]
+}
