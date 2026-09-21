@@ -1,0 +1,113 @@
+import { test, describe } from 'node:test';
+import assert from 'node:assert/strict';
+import { handleRequest } from '../server.js';
+
+const req = (id, method, params) => ({ jsonrpc: '2.0', id, method, params });
+
+describe('protocol', () => {
+  test('initialize returns protocol version and server info', () => {
+    const r = handleRequest(req(1, 'initialize', {}));
+    assert.equal(r.result.protocolVersion, '2025-06-18');
+    assert.equal(r.result.serverInfo.name, 'pocketpmo-mcp');
+  });
+
+  test('ping returns empty result', () => {
+    const r = handleRequest(req(2, 'ping'));
+    assert.deepEqual(r.result, {});
+  });
+
+  test('notifications return null (no response)', () => {
+    assert.equal(handleRequest({ jsonrpc: '2.0', method: 'notifications/initialized' }), null);
+  });
+
+  test('unknown method -> -32601', () => {
+    const r = handleRequest(req(3, 'resources/list'));
+    assert.equal(r.error.code, -32601);
+  });
+
+  test('non-object request -> -32600', () => {
+    const r = handleRequest('hello');
+    assert.equal(r.error.code, -32600);
+  });
+});
+
+describe('tools', () => {
+  test('tools/list exposes 7 read-only tools', () => {
+    const r = handleRequest(req(4, 'tools/list'));
+    assert.equal(r.result.tools.length, 7);
+    for (const t of r.result.tools) {
+      assert.ok(t.name && t.description && t.inputSchema);
+    }
+  });
+
+  test('unknown tool -> in-band error result, not crash', () => {
+    const r = handleRequest(req(5, 'tools/call', { name: 'nope', arguments: {} }));
+    assert.equal(r.result.isError, true);
+  });
+
+  test('invalid params -> -32602', () => {
+    const r = handleRequest(req(6, 'tools/call', 'oops'));
+    assert.equal(r.error.code, -32602);
+  });
+});
+
+describe('tool calls against bundled sample project', () => {
+  test('list_projects finds the sample', () => {
+    const r = handleRequest(req(7, 'tools/call', { name: 'list_projects', arguments: {} }));
+    const payload = JSON.parse(r.result.content[0].text);
+    assert.ok(payload.projects.some((p) => p.id === '101'));
+  });
+
+  test('pert_estimate with target returns completion probability', () => {
+    const r = handleRequest(
+      req(8, 'tools/call', { name: 'pert_estimate', arguments: { project: '101', targetDuration: 95 } })
+    );
+    const payload = JSON.parse(r.result.content[0].text);
+    assert.equal(payload.rollup.expected > 0, true);
+    assert.ok(payload.completionProbability.probability > 0 && payload.completionProbability.probability <= 1);
+  });
+
+  test('critical_path finds the long chain through integration build', () => {
+    const r = handleRequest(req(9, 'tools/call', { name: 'critical_path', arguments: { project: '101' } }));
+    const payload = JSON.parse(r.result.content[0].text);
+    // a1 -> a2 -> a4 -> a5 -> a6 = 10+15+30+15+5 = 75 days
+    assert.equal(payload.projectDuration, 75);
+    assert.deepEqual(payload.criticalActivities, ['a1', 'a2', 'a4', 'a5', 'a6']);
+  });
+
+  test('monte_carlo is deterministic with the same seed', () => {
+    const args = { project: '101', iterations: 300, targets: [100, 110] };
+    const r1 = handleRequest(req(10, 'tools/call', { name: 'monte_carlo', arguments: args }));
+    const r2 = handleRequest(req(11, 'tools/call', { name: 'monte_carlo', arguments: args }));
+    assert.equal(r1.result.content[0].text, r2.result.content[0].text);
+    const payload = JSON.parse(r1.result.content[0].text);
+    assert.ok(payload.percentiles.p10 <= payload.percentiles.p50);
+    assert.ok(payload.percentiles.p50 <= payload.percentiles.p90);
+  });
+
+  test('evm_metrics returns coherent metrics', () => {
+    const r = handleRequest(
+      req(12, 'tools/call', { name: 'evm_metrics', arguments: { project: '101', statusDate: '2026-09-21' } })
+    );
+    const m = JSON.parse(r.result.content[0].text);
+    assert.equal(m.budgetAtComplete, 480000);
+    // EV = 96000 (m1 complete) + 150000*0.5 + 140000*0.5 = 240000
+    assert.equal(m.earnedValue, 240000);
+    // AC = 96000 + 150000*0.5 + 140000*0.5 = 241000 (costs differ from %-weights)
+    assert.equal(m.actualCost, 241000);
+    assert.ok(m.timeline.actualTimePercentage > 0 && m.timeline.actualTimePercentage < 1);
+  });
+
+  test('risk_register ranks by probability x impact', () => {
+    const r = handleRequest(req(13, 'tools/call', { name: 'risk_register', arguments: { project: '101' } }));
+    const payload = JSON.parse(r.result.content[0].text);
+    assert.equal(payload.risks[0].id, 'r1');
+    assert.equal(payload.risks[0].score, 16);
+  });
+
+  test('bad project name -> in-band error with available ids', () => {
+    const r = handleRequest(req(14, 'tools/call', { name: 'get_project', arguments: { project: 'ghost' } }));
+    assert.equal(r.result.isError, true);
+    assert.ok(r.result.content[0].text.includes('no project matching'));
+  });
+});
