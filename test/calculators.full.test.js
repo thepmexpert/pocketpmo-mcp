@@ -47,6 +47,23 @@ test('cpmNetwork: parallel branches give the shorter one float', () => {
   assert.equal(net.projectDuration, 12);
 });
 
+test('cpmNetwork: independent parallel terminal activities are not all critical', () => {
+  // Two unrelated terminal activities: only the longest defines the project
+  // duration, so the shorter one must carry float. Terminal lf = project
+  // duration, not the activity's own ef.
+  const acts = [
+    { id: 'A', duration: 10, predecessors: [] },
+    { id: 'B', duration: 5, predecessors: [] }
+  ];
+  const net = cpmNetwork(acts);
+  const byId = Object.fromEntries(net.activities.map((a) => [a.id, a]));
+  assert.equal(byId.A.critical, true);
+  assert.equal(byId.B.critical, false);
+  assert.equal(byId.B.float, 5);
+  assert.equal(byId.B.lf, 10); // project duration, not its own ef of 5
+  assert.equal(net.projectDuration, 10);
+});
+
 test('cpmNetwork: diamond dependency', () => {
   const acts = [
     { id: 's', duration: 2, predecessors: [] },
