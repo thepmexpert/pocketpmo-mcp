@@ -123,8 +123,8 @@ function loadOrFail(idOrName) {
 
 const HANDLERS = {
   list_projects() {
-    const { projects, warnings } = listProjects();
-    return { projects, warnings, read_only: true };
+    const { dir, projects, warnings } = listProjects();
+    return { dir: dir ?? null, projects, warnings, read_only: true };
   },
 
   get_project(args) {
