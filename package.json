@@ -1,0 +1,14 @@
+{
+  "name": "pocketpmo-mcp",
+  "version": "0.1.0",
+  "description": "Read-only MCP server exposing PocketPMO forecast tools (PERT, CPM, Monte Carlo, EVM)",
+  "type": "module",
+  "main": "server.js",
+  "bin": { "pocketpmo-mcp": "./server.js" },
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test test/*.test.js"
+  },
+  "engines": { "node": ">=18" },
+  "license": "MIT"
+}
