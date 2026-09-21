@@ -201,7 +201,13 @@ const HANDLERS = {
     const p = loadOrFail(args.project);
     const acts = Array.isArray(p.activities) ? p.activities : [];
     if (!acts.length) throw new Error(`project '${args.project}' has no activities`);
-    const iterations = Math.min(Math.max(Number(args.iterations) || 2000, 1), MAX_ITERATIONS);
+    // Coerce → default, floor fractional, clamp to [1, MAX_ITERATIONS].
+    // runMonteCarlo throws on non-integers, so floor before it sees the value.
+    const requested = Number(args.iterations);
+    const iterations = Math.min(
+      Math.max(Math.floor(Number.isFinite(requested) ? requested : 2000) || 2000, 1),
+      MAX_ITERATIONS
+    );
     const result = runMonteCarlo({
       activities: structuredClone(acts),
       iterations,

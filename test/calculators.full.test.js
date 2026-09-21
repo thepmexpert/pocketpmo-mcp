@@ -195,6 +195,26 @@ test('runMonteCarlo: target probabilities agree with the simulated percentiles',
   assert.ok(below < at, `P(<= p50-0.5) ${below} should be below P(<= p50) ${at}`);
 });
 
+test('runMonteCarlo: iterations validation', () => {
+  const acts = [{ id: 'a', duration: 3, predecessors: [] }];
+  for (const bad of [2.5, 0, -5, Number.NaN, Number.POSITIVE_INFINITY, 'abc']) {
+    assert.throws(
+      () => runMonteCarlo({ activities: acts, iterations: bad }),
+      (e) => /positive safe integer/.test(e.message),
+      `should reject ${String(bad)}`
+    );
+  }
+  // String integer coerces and reports as a real integer.
+  const coerced = runMonteCarlo({ activities: acts, iterations: '1000' });
+  assert.equal(coerced.iterations, 1000);
+  assert.ok(Number.isSafeInteger(coerced.iterations));
+  // Max bound.
+  assert.throws(
+    () => runMonteCarlo({ activities: acts, iterations: 1_000_001 }),
+    /positive safe integer/
+  );
+});
+
 test('runMonteCarlo: the dominant branch owns the critical path', () => {
   const acts = [
     { id: 'tiny', duration: 1, predecessors: [] },
