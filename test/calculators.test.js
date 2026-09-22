@@ -99,8 +99,15 @@ test('pertRollup: precision — rounded sum of raw values, not sum of rounded va
 test('pertRollup: empty list yields zeros', () => {
   const roll = pertRollup([]);
   assert.equal(roll.expected, 0);
-  assert.equal(roll.variance, 0);  assert.equal(roll.stdDev, 0);
+  assert.equal(roll.variance, 0);
+  assert.equal(roll.stdDev, 0);
   assert.deepEqual(roll.skipped, []);
+});
+
+test('pertRollup: null array entries do not throw', () => {
+  const roll = pertRollup([null, { id: 'a', expected: 5, variance: 2 }]);
+  assert.equal(roll.expected, 5);
+  assert.deepEqual(roll.skipped, [null]);
 });
 
 test('pertRollup: non-finite statistics are skipped and reported, not zero-coerced', () => {
