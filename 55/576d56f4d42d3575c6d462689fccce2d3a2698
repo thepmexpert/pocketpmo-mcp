@@ -1,0 +1,22 @@
+README.md
+  h_bb77324e13b22c 43
+docs/2026-09-21-pmo-mcp-implementation-plan.md
+  h_bb77324e13b22c 75-78
+lib/calculators.js
+  h_bb77324e13b22c 355-364,462-465,473,475,549-556,561-566,662-665,667-669
+server.js
+  h_bb77324e13b22c 22,171-180,183-184,188,200-207,210,245-246,248-249
+test/calculators.full.test.js
+  h_bb77324e13b22c 250-251,253
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "55576d56f4d42d3575c6d462689fccce2d3a2698",
+  "prompts": {},
+  "humans": {
+    "h_bb77324e13b22c": {
+      "author": "David <david4david4david4@gmail.com>"
+    }
+  }
+}
