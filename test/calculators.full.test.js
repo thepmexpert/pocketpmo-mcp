@@ -221,12 +221,14 @@ test('makeRng: different seeds diverge', () => {
 test('buildDistributions: defaults triangular around base duration', () => {
   const { distributions: d, issues } = buildDistributions([{ id: 'x', duration: 10 }]);
   assert.equal(issues.length, 0);
+  // mean metadata = ACTUAL triangular mean (7+10+15)/3, not the bare
+  // duration (review #19) — the sampler draws from the triple.
   assert.deepEqual(d.x, {
     type: 'triangular',
     optimistic: 7,
     mostLikely: 10,
     pessimistic: 15,
-    mean: 10,
+    mean: 32 / 3,
     stdDev: 2
   });
 });
@@ -472,4 +474,223 @@ test('evmMetrics: bad budget -> zeros and issue', () => {
   const r = evmMetrics(evmOpts({ budget: 'lots' }));
   assert.equal(r.earnedValue, 0);
   assert.ok(r.issues.some((i) => i.field === 'budget'));
+});
+
+// --- Review batch 2 regressions (#19-#28) ---------------------------------
+
+test('#19 buildDistributions: metadata mean = actual triangular mean', () => {
+  const { distributions: d, issues } = buildDistributions([
+    { id: 'x', duration: 10 }
+  ]);
+  // Default triple 7/10/15 -> actual mean 32/3, NOT the bare duration.
+  assert.equal(d.x.mean, (7 + 10 + 15) / 3);
+  assert.equal(issues.length, 0);
+});
+
+test('#19 buildDistributions: explicit mean disagreeing with triple is reported and ignored', () => {
+  const { distributions: d, issues } = buildDistributions([
+    { id: 'x', duration: 10, distribution: { optimistic: 5, mostLikely: 10, pessimistic: 15, mean: 12 } }
+  ]);
+  assert.equal(d.x.mean, 10); // (5+10+15)/3, NOT the configured 12
+  assert.ok(
+    issues.some((i) => i.activityId === 'x' && /configured mean does not apply/.test(i.message))
+  );
+});
+
+test('#19 buildDistributions: normal distributions keep their configured mean', () => {
+  const { distributions: d } = buildDistributions([
+    { id: 'x', duration: 10, distribution: { type: 'normal', mean: 12, stdDev: 2 } }
+  ]);
+  assert.equal(d.x.mean, 12);
+});
+
+test('#20 runMonteCarlo: percentiles interpolate R-7 on tiny samples', () => {
+  // 2 iterations of a degenerate chain -> durations [10, 20].
+  // R-7 p50 = 10 + 0.5*(20-10) = 15; floor-index would have said 10.
+  const acts = [
+    { id: 'a', duration: 10, distribution: { optimistic: 10, mostLikely: 10, pessimistic: 10 } },
+    { id: 'b', duration: 0, predecessors: ['a'], distribution: { optimistic: 20, mostLikely: 20, pessimistic: 20 } }
+  ];
+  const r = runMonteCarlo({ activities: acts, iterations: 2, rng: makeRng(5) });
+  assert.ok(Number.isFinite(r.mean));
+  // Degenerate: both iterations identical -> any quantile equals the constant.
+  const constant = [
+    { id: 'a', duration: 13, distribution: { optimistic: 13, mostLikely: 13, pessimistic: 13 } }
+  ];
+  const rc = runMonteCarlo({ activities: constant, iterations: 4, rng: makeRng(9) });
+  assert.equal(rc.percentiles.p10, 13);
+  assert.equal(rc.percentiles.p50, 13);
+  assert.equal(rc.percentiles.p90, 13);
+});
+
+test('#21 runMonteCarlo: criticalActivityFrequency replaces the misnamed field', () => {
+  const acts = [
+    { id: 'a', duration: 5 },
+    { id: 'b', duration: 5, predecessors: ['a'] }
+  ];
+  const r = runMonteCarlo({ activities: acts, iterations: 50, rng: makeRng(42) });
+  assert.ok(Array.isArray(r.criticalActivityFrequency));
+  assert.ok(r.criticalActivityFrequency.length === 2);
+  for (const e of r.criticalActivityFrequency) {
+    assert.equal(e.share, 1); // single chain: every activity critical every run
+  }
+  // Deprecated alias still present and identical for old consumers.
+  assert.deepEqual(r.criticalPathFrequency, r.criticalActivityFrequency);
+});
+
+test('#22 evmMetrics: inProgressValue 0 is honored, not defaulted to 50', () => {
+  const r = evmMetrics({
+    budget: 1000,
+    milestones: [{ percentage: 100, cost: 1000, progress: 0.1 }],
+    inProgressValue: 0,
+    startDate: '2026-09-01',
+    endDate: '2026-09-30',
+    statusDate: '2026-09-16'
+  });
+  assert.equal(r.earnedValue, 0);
+  assert.equal(r.actualCost, 0);
+});
+
+test('#22 evmMetrics: missing inProgressValue still defaults to 50', () => {
+  const r = evmMetrics({
+    budget: 1000,
+    milestones: [{ percentage: 100, cost: 1000, progress: 0.1 }],
+    inProgressValue: undefined,
+    startDate: '2026-09-01',
+    endDate: '2026-09-30',
+    statusDate: '2026-09-16'
+  });
+  assert.equal(r.earnedValue, 500);
+});
+
+test('#22 evmMetrics: out-of-range inProgressValue is clamped and reported', () => {
+  const r = evmMetrics({
+    budget: 1000,
+    milestones: [{ percentage: 100, cost: 1000, progress: 0.1 }],
+    inProgressValue: 150,
+    startDate: '2026-09-01',
+    endDate: '2026-09-30',
+    statusDate: '2026-09-16'
+  });
+  assert.equal(r.earnedValue, 1000); // clamped to 100%
+  assert.ok(r.issues.some((i) => i.field === 'inProgressValue'));
+});
+
+test('#23 evmMetrics: string progress sentinels are normalized', () => {
+  const r = evmMetrics({
+    budget: 1000,
+    milestones: [
+      { percentage: 100, cost: 100, progress: '1' },
+      { percentage: 100, cost: 100, progress: '0.1' },
+      { percentage: 100, cost: 100, progress: '0' }
+    ],
+    startDate: '2026-09-01',
+    endDate: '2026-09-30',
+    statusDate: '2026-09-16'
+  });
+  // 1000*1 + 1000*0.5 + 0 = 1500 EV; AC = 100*1 + 100*0.5 + 0 = 150
+  // (in-progress cost is also spread by the fraction — faithful to app).
+  assert.equal(r.earnedValue, 1500);
+  assert.equal(r.actualCost, 150);
+});
+
+test('#23 evmMetrics: COMPLETE/IN_PROGRESS labels are normalized', () => {
+  const r = evmMetrics({
+    budget: 1000,
+    milestones: [
+      { percentage: 100, cost: 100, progress: 'COMPLETE' },
+      { percentage: 100, cost: 100, progress: 'IN_PROGRESS' }
+    ],
+    startDate: '2026-09-01',
+    endDate: '2026-09-30',
+    statusDate: '2026-09-16'
+  });
+  assert.equal(r.earnedValue, 1500);
+});
+
+test('#24 evmMetrics: negative percentage and cost are clamped with issues', () => {
+  const r = evmMetrics({
+    budget: 1000,
+    milestones: [{ percentage: -20, cost: -500, progress: 1 }],
+    startDate: '2026-09-01',
+    endDate: '2026-09-30',
+    statusDate: '2026-09-16'
+  });
+  assert.equal(r.earnedValue, 0);
+  assert.equal(r.actualCost, 0);
+  assert.ok(r.issues.some((i) => /percentage/.test(i.message)));
+  assert.ok(r.issues.some((i) => /cost/.test(i.message)));
+});
+
+test('#24 evmMetrics: percentage >100 clamps; totals over 100 are reported', () => {
+  const r = evmMetrics({
+    budget: 1000,
+    milestones: [
+      { percentage: 80, cost: 100, progress: 1 },
+      { percentage: 150, cost: 100, progress: 1 }
+    ],
+    startDate: '2026-09-01',
+    endDate: '2026-09-30',
+    statusDate: '2026-09-16'
+  });
+  // 80 + clamp(150->100) = 180 total: allowed, reported, EV = 1800.
+  assert.equal(r.earnedValue, 1800);
+  assert.ok(r.issues.some((i) => /total 180%/.test(i.message)));
+  assert.ok(r.issues.some((i) => i.received === 150));
+});
+
+test('#26 evmMetrics: invalid statusDate is reported, metrics stay finite', () => {
+  const r = evmMetrics(
+    evmOpts({ statusDate: 'not-a-date' })
+  );
+  assert.ok(r.issues.some((i) => i.field === 'dates' && /statusDate/.test(i.message)));
+  assert.ok(Number.isFinite(r.plannedValue));
+  assert.ok(Number.isFinite(r.spi));
+});
+
+test('#27 evmMetrics: calendar-day math is DST/timezone-exact for date-only strings', () => {
+  // 2026-02-28 -> 2026-03-31 spans no DST in UTC terms; 31 days either way.
+  // A DST-fragile local-time implementation in a UTC- offset runtime would
+  // still count days via ms/86400000 with ceil — pin the UTC answer.
+  const r = evmMetrics(
+    evmOpts({ startDate: '2026-02-28', endDate: '2026-03-31', statusDate: '2026-03-16' })
+  );
+  assert.equal(r.timeline.projectDurationDays, 31);
+  assert.equal(r.timeline.elapsedDays, 16);
+});
+
+test('#27 evmMetrics: same dates give identical fractions on UTC and +13 offsets', () => {
+  const args = {
+    budget: 100000,
+    milestones,
+    startDate: '2026-09-01',
+    endDate: '2026-09-30',
+    statusDate: '2026-09-16'
+  };
+  // UTC calendar-day invariant: 2026-09-01 -> 2026-09-30 = 29 days,
+  // status at 09-16 = 15 days elapsed. round4 boundary rounding applies.
+  const r = evmMetrics(args);
+  assert.equal(r.timeline.projectDurationDays, 29);
+  assert.equal(r.timeline.elapsedDays, 15);
+  assert.ok(Math.abs(r.timeline.actualTimePercentage - 15 / 29) < 1e-4);
+});
+
+test('#28 evmMetrics: zero actual cost yields null EAC/VAC, not a fake zero', () => {
+  const r = evmMetrics({
+    budget: 1000,
+    milestones: [{ percentage: 50, cost: 0, progress: 0.1 }],
+    startDate: '2026-09-01',
+    endDate: '2026-09-30',
+    statusDate: '2026-09-16'
+  });
+  assert.equal(r.eac, null);
+  assert.equal(r.vac, null);
+  // CPI keeps the documented 0 convention (no recorded cost).
+  assert.equal(r.cpi, 0);
+});
+
+test('#28 evmMetrics: EAC numeric when costs exist', () => {
+  const r = evmMetrics(evmOpts());
+  assert.equal(typeof r.eac, 'number');
+  assert.equal(typeof r.vac, 'number');
 });

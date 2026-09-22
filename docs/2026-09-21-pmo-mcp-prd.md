@@ -86,8 +86,8 @@ jobs: Monday-morning portfolio briefing with live CPI/SPI. A dedicated
 | `get_project` | {project} | metadata + data-shape summary |
 | `pert_estimate` | {project, targetDuration?} | per-activity expected/variance/stdDev, roll-up, P(completion ≤ target) |
 | `critical_path` | {project} | es/ef/ls/lf/float per activity, critical set, project duration |
-| `monte_carlo` | {project, iterations?, targets?} | p10/p50/p90, mean, stdDev, P(≤ each target), critical-path frequency |
-| `evm_metrics` | {project, statusDate?} | PV, EV, AC, CPI, SPI, EAC, VAC, timeline % |
+| `monte_carlo` | {project, iterations?, targets?} | p10/p50/p90 (R-7 quantiles), mean, stdDev, P(≤ each target), criticalActivityFrequency |
+| `evm_metrics` | {project, statusDate?} | PV, EV, AC, CPI, SPI, EAC, VAC (null when no actual cost), timeline % |
 | `risk_register` | {project} | risks with probability × impact score, ranked |
 
 - `iterations` clamped ≤ 20000 (default 2000).

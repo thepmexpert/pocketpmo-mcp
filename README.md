@@ -42,8 +42,8 @@ skipped with a warning; the server never crashes on bad input.
 | `get_project` | `project` | schedule/budget metadata + data-shape counts |
 | `pert_estimate` | `project`, `targetDuration?` | per-activity expected/variance/stdDev, roll-up, P(completion ≤ target). Assumes independent activity durations — correlated durations (shared resources, common risks) make the true variance larger; treat roll-up as optimistic |
 | `critical_path` | `project` | es/ef/ls/lf/float, critical set, project duration |
-| `monte_carlo` | `project`, `iterations?`, `targets?`, `seed?` | p10/p50/p90, mean/σ, P(≤ target), critical-path frequency |
-| `evm_metrics` | `project`, `statusDate?` | PV, EV, AC, CPI, SPI, EAC, VAC, timeline % |
+| `monte_carlo` | `project`, `iterations?`, `targets?`, `seed?` | p10/p50/p90 (R-7), mean/σ, P(≤ target), criticalActivityFrequency |
+| `evm_metrics` | `project`, `statusDate?` | PV, EV, AC, CPI, SPI, EAC, VAC, timeline % (EAC/VAC null when AC=0) |
 | `risk_register` | `project` | risks scored P×I, ranked |
 
 Design guarantees:

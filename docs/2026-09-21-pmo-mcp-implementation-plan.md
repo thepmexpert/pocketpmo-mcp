@@ -116,7 +116,7 @@ activity dominates p90. **Commit:** `feat: port Monte Carlo engine`.
 - EV = Σ (budget·percentage/100) · (1 if complete, inProgressFraction if
   in-progress). AC = Σ cost · same multipliers. PV = budget ·
   actualTimePercentage where actualTimePercentage = elapsedDays/totalDays
-  clamped [0,1]. CPI = EV/AC; SPI = EV/PV; EAC = BAC/CPI; VAC = BAC−EAC.
+  clamped [0,1]. CPI = EV/AC; SPI = EV/PV; EAC = BAC/CPI; VAC = BAC−EAC. Dates are UTC calendar-day math; invalid dates are reported in issues[]. EAC/VAC = null when AC = 0 (CPI undefined, matching calculateEvmAdvancedMetrics).
 - Invalid budget → 0s throughout, flagged in response `issues`.
 
 **Tests:** all-complete milestones → EV=BAC; halfway in-progress → fraction;
@@ -156,7 +156,7 @@ response), `tools/list`, `tools/call`. Unknown method → −32601. Handler erro
 4. `critical_path({project})` → CPM network: es/ef/ls/lf/float, critical flag,
    project duration
 5. `monte_carlo({project, iterations?, targets?})` → duration percentiles,
-   mean/stdDev, P(finish by target), critical-path frequency table
+   mean/stdDev, P(finish by target), criticalActivityFrequency table (per-activity criticality; criticalPathFrequency kept as deprecated alias)
    (iterations clamped ≤ 20000)
 6. `evm_metrics({project, statusDate?})` → PV/EV/AC/CPI/SPI/EAC/VAC + timeline
 7. `risk_register({project})` → risks with probability-impact score
