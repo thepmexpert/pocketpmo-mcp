@@ -219,7 +219,8 @@ test('makeRng: different seeds diverge', () => {
 });
 
 test('buildDistributions: defaults triangular around base duration', () => {
-  const d = buildDistributions([{ id: 'x', duration: 10 }]);
+  const { distributions: d, issues } = buildDistributions([{ id: 'x', duration: 10 }]);
+  assert.equal(issues.length, 0);
   assert.deepEqual(d.x, {
     type: 'triangular',
     optimistic: 7,
@@ -231,12 +232,35 @@ test('buildDistributions: defaults triangular around base duration', () => {
 });
 
 test('buildDistributions: explicit distribution fields honoured', () => {
-  const d = buildDistributions([
+  const { distributions: d } = buildDistributions([
     { id: 'x', duration: 10, distribution: { min: 4, mode: 6, max: 20 } }
   ]);
   assert.equal(d.x.optimistic, 4);
   assert.equal(d.x.mostLikely, 6);
   assert.equal(d.x.pessimistic, 20);
+});
+
+test('buildDistributions: normalization repairs and reports', () => {
+  const { distributions: d, issues } = buildDistributions([
+    { id: 'out-of-order', duration: 10, distribution: { optimistic: 10, mostLikely: 5, pessimistic: 2 } },
+    { id: 'neg-stddev', duration: 10, distribution: { stdDev: -3 } },
+    { id: 'bad-type', duration: 10, distribution: { type: 'weibull' } },
+    { id: 'string-coerce', duration: 10, distribution: { mostLikely: '8' } }
+  ]);
+  // Out-of-order triple is sorted o <= m <= p and reported.
+  const oo = d['out-of-order'];
+  assert.ok(oo.optimistic <= oo.mostLikely && oo.mostLikely <= oo.pessimistic);
+  // Negative stdDev repaired to the default and reported.
+  assert.equal(d['neg-stddev'].stdDev, 2);
+  // Unknown type coerced to triangular and reported.
+  assert.equal(d['bad-type'].type, 'triangular');
+  // Numeric strings coerced without an issue (valid normalization).
+  assert.equal(d['string-coerce'].mostLikely, 8);
+  const byId = Object.fromEntries(issues.map((i) => [i.activityId, i.field]));
+  assert.equal(byId['out-of-order'], 'distribution');
+  assert.equal(byId['neg-stddev'], 'distribution');
+  assert.equal(byId['bad-type'], 'distribution');
+  assert.equal(byId['string-coerce'], undefined);
 });
 
 test('runMonteCarlo: deterministic with same seed', () => {

@@ -4,6 +4,8 @@ import {
   pertStats,
   pertRollup,
   pertCompletionProbability,
+  runMonteCarlo,
+  makeRng,
   round2
 } from '../lib/calculators.js';
 
@@ -150,4 +152,46 @@ test('pertCompletionProbability: zero stdDev -> deterministic outcome', () => {
 
 test('pertCompletionProbability: invalid stdDev returns 0.5', () => {
   assert.equal(pertCompletionProbability(10, Number.NaN, 10), 0.5);
+});
+
+test('pertCompletionProbability: unclamped tails — a real normal CDF', () => {
+  // Beyond 3 sigma the clamp used to flatten to Phi(+-3) ~ 0.0013/0.9987.
+  // Unclamped, z = 10 must be effectively 1, z = -10 effectively 0.
+  assert.equal(pertCompletionProbability(10, 1, 20), 1);   // z = +10
+  assert.equal(pertCompletionProbability(10, 1, 0), 0);    // z = -10
+  // Just past 3 sigma: strictly beyond the old clamp, smoothly.
+  const p35 = pertCompletionProbability(10, 1, 13.5);      // z = 3.5
+  assert.ok(p35 > 0.9997 && p35 < 1, `z=3.5 gave ${p35}, expected (0.9997, 1)`);
+});
+
+test('pertCompletionProbability: negative stdDev is invalid input, not zero variance', () => {
+  // stdDev = -2 used to hit the `<= 0` branch and claim determinism.
+  assert.equal(pertCompletionProbability(10, -2, 10), 0.5);
+  assert.equal(pertCompletionProbability(10, -2, 99), 0.5);
+});
+
+test('runMonteCarlo: inverted triangular triple never yields NaN durations', () => {
+  // o=10, m=5, p=2 used to compute sqrt(negative) -> NaN -> poisoned network.
+  const acts = [
+    { id: 'a', duration: 10, distribution: { optimistic: 10, mostLikely: 5, pessimistic: 2 } },
+    { id: 'b', duration: 5, predecessors: ['a'] }
+  ];
+  const r = runMonteCarlo({ activities: acts, iterations: 200, rng: makeRng(7) });
+  assert.ok(Number.isFinite(r.mean) && r.mean > 0, `mean ${r.mean} not finite/positive`);
+  assert.ok(r.percentiles.p90 >= r.percentiles.p50 && r.percentiles.p50 >= r.percentiles.p10);
+  // The repair is surfaced as an issue.
+  assert.ok(
+    r.issues.some((i) => i.activityId === 'a' && /out of order/.test(i.message)),
+    'ordering repair must be reported'
+  );
+});
+
+test('runMonteCarlo: degenerate triangular o=m=p returns the constant', () => {
+  const acts = [
+    { id: 'a', duration: 7, distribution: { optimistic: 7, mostLikely: 7, pessimistic: 7 } }
+  ];
+  const r = runMonteCarlo({ activities: acts, iterations: 50, rng: makeRng(3) });
+  assert.equal(r.mean, 7);
+  assert.equal(r.stdDev, 0);
+  assert.equal(r.percentiles.p10, 7);
 });
