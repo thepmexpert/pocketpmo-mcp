@@ -18,7 +18,8 @@ import {
   makeRng,
   evmMetrics,
   validateActivities,
-  validDuration
+  validDuration,
+  round2
 } from './lib/calculators.js';
 import { listProjects, getProject, projectsDir } from './lib/projects.js';
 
@@ -188,7 +189,16 @@ const HANDLERS = {
           });
         }
       }
-      return { id: a.id, name: a.name ?? a.id, ...pertStats(o, m, pe) };
+      const stats = pertStats(o, m, pe);
+      // Full precision flows into the rollup; per-activity values are
+      // rounded only for display here at the API boundary.
+      return {
+        id: a.id,
+        name: a.name ?? a.id,
+        expected: round2(stats.expected),
+        variance: round2(stats.variance),
+        stdDev: round2(stats.stdDev)
+      };
     });
     const rollup = pertRollup(detailed);
     const result = {

@@ -8,8 +8,10 @@ import {
 
 test('pertStats: golden case o=3 m=5 p=9', () => {
   const s = pertStats(3, 5, 9);
-  assert.equal(s.expected, 5.33); // (3 + 20 + 9) / 6 = 5.333... -> 5.33
-  assert.equal(s.variance, 1);    // ((9-3)/6)^2 = 1
+  // Full precision: expected = 16/3 = 5.333..., variance = 1, stdDev = 1.
+  // Rounding happens at the API boundary (pertRollup, tool layer), not here.
+  assert.ok(Math.abs(s.expected - 16 / 3) < 1e-12);
+  assert.equal(s.variance, 1);
   assert.equal(s.stdDev, 1);
 });
 
@@ -59,18 +61,38 @@ test('pertStats: boundary o=m=p=0 is valid (zero variance, zero expected)', () =
 
 test('pertStats: numeric strings are coerced', () => {
   const s = pertStats('3', '5', '9');
-  assert.equal(s.expected, 5.33);
+  assert.ok(Math.abs(s.expected - 16 / 3) < 1e-12);
+});
+
+test('pertStats: full precision — no per-activity rounding', () => {
+  // o=1, m=2, p=4 -> expected = 13/6 = 2.1666..., variance = 0.25.
+  // Under the old 2dp rounding this came back as 2.17, and summing many of
+  // those drifted from the true sum.
+  const s = pertStats(1, 2, 4);
+  assert.ok(Math.abs(s.expected - 13 / 6) < 1e-12);
+  assert.equal(s.variance, 0.25);
 });
 
 test('pertRollup: sums variances, sqrt of summed variance for stdDev', () => {
   const acts = [
     { id: 'a', ...pertStats(3, 5, 9) },
-    { id: 'b', ...pertStats(1, 2, 3) } // expected 2, var ((3-1)/6)^2=0.11
+    { id: 'b', ...pertStats(1, 2, 3) } // expected 2, var ((3-1)/6)^2=0.111...
   ];
   const roll = pertRollup(acts);
+  // Raw sum 16/3 + 2 = 7.333... -> rounds to 7.33 at the boundary; the
+  // old rounded-sum path also gave 7.33 here, but from rounded inputs.
   assert.equal(roll.expected, 7.33);
   assert.equal(roll.variance, 1.11);
   assert.equal(roll.stdDev, Math.sqrt(1.11).toFixed(2) * 1);
+});
+
+test('pertRollup: precision — rounded sum of raw values, not sum of rounded values', () => {
+  // 100 identical activities with repeating-decimal expected (13/6).
+  // Old behavior: 100 * round(13/6, 2) = 100 * 2.17 = 217.
+  // Correct: round(100 * 13/6, 2) = round(216.66..., 2) = 216.67.
+  const acts = Array.from({ length: 100 }, () => pertStats(1, 2, 4));
+  const roll = pertRollup(acts);
+  assert.equal(roll.expected, 216.67);
 });
 
 test('pertRollup: empty list yields zeros', () => {
