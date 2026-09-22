@@ -247,9 +247,10 @@ test('buildDistributions: normalization repairs and reports', () => {
     { id: 'bad-type', duration: 10, distribution: { type: 'weibull' } },
     { id: 'string-coerce', duration: 10, distribution: { mostLikely: '8' } }
   ]);
-  // Out-of-order triple is sorted o <= m <= p and reported.
+  // Out-of-order triple is sorted o <= m <= p and reported; exact repaired
+  // values pinned so a value-collapsing sort bug cannot pass.
   const oo = d['out-of-order'];
-  assert.ok(oo.optimistic <= oo.mostLikely && oo.mostLikely <= oo.pessimistic);
+  assert.deepEqual([oo.optimistic, oo.mostLikely, oo.pessimistic], [2, 5, 10]);
   // Negative stdDev repaired to the default and reported.
   assert.equal(d['neg-stddev'].stdDev, 2);
   // Unknown type coerced to triangular and reported.

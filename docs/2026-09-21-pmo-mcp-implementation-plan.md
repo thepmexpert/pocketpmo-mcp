@@ -72,8 +72,10 @@ target far below → ~1.0).
 **Semantics (faithful to `src/utils/cpmCalculator.js` `calculateCpmNetwork`):**
 Iterative forward pass (handles non-topological order): activities with no
 predecessors get es=0, ef=duration; others wait until all predecessors
-processed, es=max(pred.ef), ef=es+duration. Backward pass from max EF: lf=ef
-for activities nothing depends on; lf=min(succ.ls); ls=lf−duration;
+processed, es=max(pred.ef), ef=es+duration. Backward pass from max EF:
+lf=projectDuration (max EF) for activities nothing depends on (NOT the
+activity's own ef — that would wrongly zero their float and mark parallel
+terminals critical); lf=min(succ.ls); ls=lf−duration;
 float=ls−es. Critical = float 0. Unreachable activities (cycles) stay
 unprocessed and are reported.
 

@@ -19,6 +19,7 @@ import {
   evmMetrics,
   validateActivities,
   validDuration,
+  validPertOrdering,
   round2
 } from './lib/calculators.js';
 import { listProjects, getProject, projectsDir } from './lib/projects.js';
@@ -167,37 +168,24 @@ const HANDLERS = {
         issues.push({ activityId: a.id ?? null, field: 'duration', message: 'no usable duration; pert stats will be NaN', received: a.duration ?? null });
       }
       // Raw distribution triples bypass the app's edit-mode validation, so
-      // ordering/positivity violations surface here as issues — the stats
-      // themselves come back NaN via pertStats' guard.
-      if (a.distribution) {
-        const d = a.distribution;
-        const dO = d.optimistic;
-        const dM = d.mostLikely;
-        const dP = d.pessimistic;
-        const badOrder =
-          (Number.isFinite(dO) && Number.isFinite(dM) && dO > dM) ||
-          (Number.isFinite(dM) && Number.isFinite(dP) && dM > dP);
-        const negative =
-          (Number.isFinite(dO) && dO < 0) ||
-          (Number.isFinite(dM) && dM < 0) ||
-          (Number.isFinite(dP) && dP < 0);
-        if (badOrder || negative) {
-          issues.push({
-            activityId: a.id ?? null,
-            field: 'distribution',
-            message: `estimates violate o <= m <= p with all values >= 0: optimistic=${dO}, mostLikely=${dM}, pessimistic=${dP}; pert stats will be NaN`
-          });
-        }
+      // ordering/positivity violations surface here as issues — checked on
+      // the EFFECTIVE values (after duration-derived fallbacks), via the
+      // same shared predicate pertStats uses.
+      if (!validPertOrdering(o, m, pe)) {
+        issues.push({
+          activityId: a.id ?? null,
+          field: 'distribution',
+          message: `estimates violate optimistic <= mostLikely <= pessimistic with all values finite >= 0; pert stats will be NaN`,
+          received: { optimistic: o, mostLikely: m, pessimistic: pe }
+        });
       }
       const stats = pertStats(o, m, pe);
-      // Full precision flows into the rollup; per-activity values are
-      // rounded only for display here at the API boundary.
+      // Full precision flows into the rollup (which rounds once at its own
+      // boundary); per-activity display values are rounded here.
       return {
         id: a.id,
         name: a.name ?? a.id,
-        expected: round2(stats.expected),
-        variance: round2(stats.variance),
-        stdDev: round2(stats.stdDev)
+        ...stats
       };
     });
     const rollup = pertRollup(detailed);
@@ -209,9 +197,17 @@ const HANDLERS = {
       });
     }
     const { skipped: _skipped, ...rollupStats } = rollup;
+    // Rollup has consumed the raw per-activity stats; round the activity
+    // display values now, at the response boundary.
+    const detailedDisplay = detailed.map((s) => ({
+      ...s,
+      expected: round2(s.expected),
+      variance: round2(s.variance),
+      stdDev: round2(s.stdDev)
+    }));
     const result = {
       project: p.name,
-      activities: detailed,
+      activities: detailedDisplay,
       rollup: rollupStats,
       read_only: true,
       issues
@@ -246,11 +242,11 @@ const HANDLERS = {
     if (!acts.length) throw new Error(`project '${args.project}' has no activities`);
     // Coerce → default, floor fractional, clamp to [1, MAX_ITERATIONS].
     // runMonteCarlo throws on non-integers, so floor before it sees the value.
+    // Default (2000) only for non-finite input — a floored finite value like
+    // 0.5 → 0 must clamp to 1, not silently become the full default.
     const requested = Number(args.iterations);
-    const iterations = Math.min(
-      Math.max(Math.floor(Number.isFinite(requested) ? requested : 2000) || 2000, 1),
-      MAX_ITERATIONS
-    );
+    const floored = Number.isFinite(requested) ? Math.floor(requested) : 2000;
+    const iterations = Math.min(Math.max(floored, 1), MAX_ITERATIONS);
     const result = runMonteCarlo({
       activities: structuredClone(acts),
       iterations,
