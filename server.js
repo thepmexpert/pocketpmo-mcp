@@ -17,7 +17,8 @@ import {
   runMonteCarlo,
   makeRng,
   evmMetrics,
-  validateActivities
+  validateActivities,
+  validDuration
 } from './lib/calculators.js';
 import { listProjects, getProject, projectsDir } from './lib/projects.js';
 
@@ -156,9 +157,7 @@ const HANDLERS = {
     if (!acts.length) throw new Error(`project '${args.project}' has no activities`);
     const detailed = acts.map((a) => {
       if (
-        !(
-          typeof a.duration === 'number' && a.duration > 0
-        ) &&
+        !validDuration(a.duration) &&
         !(a.distribution && typeof a.distribution.mostLikely === 'number')
       ) {
         issues.push({ activityId: a.id ?? null, field: 'duration', message: 'no usable duration; pert stats will be NaN', received: a.duration ?? null });

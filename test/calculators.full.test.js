@@ -6,7 +6,8 @@ import {
   buildDistributions,
   runMonteCarlo,
   evmMetrics,
-  validateActivities
+  validateActivities,
+  validDuration
 } from '../lib/calculators.js';
 
 // ---------------------------------------------------------------------------
@@ -146,6 +147,33 @@ test('validateActivities: cycles surface as issues with the path', () => {
   const cycleIssues = issues.filter((i) => i.field === 'predecessors');
   assert.equal(cycleIssues.length, 1);
   assert.match(cycleIssues[0].message, /cycle detected: [abc] -> [abc] -> [abc] -> /);
+});
+
+test('cpmNetwork: Infinity duration does not poison the network', () => {
+  const acts = [
+    { id: 'a', duration: Infinity, predecessors: [] },
+    { id: 'b', duration: 4, predecessors: ['a'] }
+  ];
+  const net = cpmNetwork(structuredClone(acts));
+  assert.equal(net.projectDuration, 4); // not Infinity
+  assert.equal(Number.isFinite(net.activities[0].lf), true);
+  const issues = validateActivities(acts);
+  assert.ok(
+    issues.some((i) => i.activityId === 'a' && i.field === 'duration'),
+    'Infinity duration must be reported as an issue'
+  );
+});
+
+test('validDuration: shared policy rejects non-finite and non-positive', () => {
+  assert.equal(validDuration(5), true);
+  assert.equal(validDuration(0.5), true);
+  assert.equal(validDuration(Infinity), false);
+  assert.equal(validDuration(-Infinity), false);
+  assert.equal(validDuration(Number.NaN), false);
+  assert.equal(validDuration(0), false);
+  assert.equal(validDuration(-5), false);
+  assert.equal(validDuration('5'), false);
+  assert.equal(validDuration(null), false);
 });
 
 // ---------------------------------------------------------------------------
