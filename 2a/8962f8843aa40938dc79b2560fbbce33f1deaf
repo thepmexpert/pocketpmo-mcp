@@ -1,0 +1,18 @@
+lib/calculators.js
+  h_bb77324e13b22c 103-113,122-124,325-332,335-336,343-391,393-398,411,421-452,454-466,471-475,478,480,608-615
+test/calculators.full.test.js
+  h_bb77324e13b22c 222-223,235,243-265
+test/calculators.test.js
+  h_bb77324e13b22c 7-8,156-197
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "2a8962f8843aa40938dc79b2560fbbce33f1deaf",
+  "prompts": {},
+  "humans": {
+    "h_bb77324e13b22c": {
+      "author": "David <david4david4david4@gmail.com>"
+    }
+  }
+}
