@@ -5,7 +5,8 @@ import {
   makeRng,
   buildDistributions,
   runMonteCarlo,
-  evmMetrics
+  evmMetrics,
+  validateActivities
 } from '../lib/calculators.js';
 
 // ---------------------------------------------------------------------------
@@ -98,6 +99,53 @@ test('cpmNetwork: unknown predecessor refs are ignored', () => {
 test('cpmNetwork: empty / non-array input is safe', () => {
   assert.deepEqual(cpmNetwork([]).activities, []);
   assert.deepEqual(cpmNetwork(null).activities, []);
+});
+
+test('cpmNetwork: simple cycle is reported as an explicit path', () => {
+  const acts = [
+    { id: 'a', duration: 3, predecessors: ['c'] },
+    { id: 'b', duration: 5, predecessors: ['a'] },
+    { id: 'c', duration: 2, predecessors: ['b'] },
+    { id: 'd', duration: 4, predecessors: [] }
+  ];
+  const net = cpmNetwork(acts);
+  assert.deepEqual(net.unresolved.sort(), ['a', 'b', 'c']);
+  assert.equal(net.cycles.length, 1);
+  const cycle = net.cycles[0];
+  assert.equal(cycle[0], cycle[cycle.length - 1]); // closes on itself
+  assert.deepEqual([...cycle].slice(0, -1).sort(), ['a', 'b', 'c']);
+  // The cycle-free part of the network still schedules normally.
+  assert.equal(net.projectDuration, 4);
+  assert.deepEqual(
+    net.activities.map((a) => a.id).sort(),
+    ['d']
+  );
+});
+
+test('cpmNetwork: activity downstream of a cycle is unresolved but not in any cycle', () => {
+  const acts = [
+    { id: 'a', duration: 3, predecessors: ['b'] },
+    { id: 'b', duration: 5, predecessors: ['a'] },
+    { id: 'c', duration: 2, predecessors: ['b'] } // depends on the cycle, not in it
+  ];
+  const net = cpmNetwork(acts);
+  assert.deepEqual(net.unresolved.sort(), ['a', 'b', 'c']);
+  assert.equal(net.cycles.length, 1);
+  const cycleNodes = new Set(net.cycles[0]);
+  assert.ok(cycleNodes.has('a') && cycleNodes.has('b'));
+  assert.equal(cycleNodes.has('c'), false); // c is downstream, not in the loop
+});
+
+test('validateActivities: cycles surface as issues with the path', () => {
+  const acts = [
+    { id: 'a', duration: 3, predecessors: ['c'] },
+    { id: 'b', duration: 5, predecessors: ['a'] },
+    { id: 'c', duration: 2, predecessors: ['b'] }
+  ];
+  const issues = validateActivities(acts);
+  const cycleIssues = issues.filter((i) => i.field === 'predecessors');
+  assert.equal(cycleIssues.length, 1);
+  assert.match(cycleIssues[0].message, /cycle detected: [abc] -> [abc] -> [abc] -> /);
 });
 
 // ---------------------------------------------------------------------------
