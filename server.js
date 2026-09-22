@@ -50,7 +50,7 @@ const TOOLS = [
   {
     name: 'pert_estimate',
     description:
-      'PERT three-point estimates per activity plus roll-up and completion probability against an optional target duration (days).',
+      'PERT three-point estimates per activity plus roll-up and completion probability against an optional target duration (days). ASSUMPTION: the variance roll-up assumes activity durations are independent — correlated durations (shared resources, common risks) make the true project variance larger, so treat the roll-up and completion probability as optimistic in that case.',
     inputSchema: {
       type: 'object',
       properties: {
