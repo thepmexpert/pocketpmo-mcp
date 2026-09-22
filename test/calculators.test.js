@@ -27,6 +27,36 @@ test('pertStats: non-finite input returns NaN, never throws', () => {
   assert.ok(Number.isNaN(s.stdDev));
 });
 
+test('pertStats: reversed ordering o > m > p returns NaN', () => {
+  // (10, 5, 2) previously produced a plausible-looking but wrong estimate.
+  const s = pertStats(10, 5, 2);
+  assert.ok(Number.isNaN(s.expected));
+  assert.ok(Number.isNaN(s.variance));
+  assert.ok(Number.isNaN(s.stdDev));
+});
+
+test('pertStats: partial ordering violation o > m returns NaN', () => {
+  const s = pertStats(6, 5, 9);
+  assert.ok(Number.isNaN(s.expected));
+});
+
+test('pertStats: partial ordering violation m > p returns NaN', () => {
+  const s = pertStats(3, 10, 9);
+  assert.ok(Number.isNaN(s.expected));
+});
+
+test('pertStats: negative estimates return NaN', () => {
+  assert.ok(Number.isNaN(pertStats(-2, 5, 9).expected));
+  assert.ok(Number.isNaN(pertStats(3, -1, 9).expected));
+  assert.ok(Number.isNaN(pertStats(3, 5, -4).expected));
+});
+
+test('pertStats: boundary o=m=p=0 is valid (zero variance, zero expected)', () => {
+  const s = pertStats(0, 0, 0);
+  assert.equal(s.expected, 0);
+  assert.equal(s.variance, 0);
+});
+
 test('pertStats: numeric strings are coerced', () => {
   const s = pertStats('3', '5', '9');
   assert.equal(s.expected, 5.33);

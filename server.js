@@ -156,15 +156,38 @@ const HANDLERS = {
     const issues = [];
     if (!acts.length) throw new Error(`project '${args.project}' has no activities`);
     const detailed = acts.map((a) => {
+      const o = a.distribution?.optimistic ?? (a.duration ?? NaN) * 0.7;
+      const m = a.distribution?.mostLikely ?? a.duration ?? NaN;
+      const pe = a.distribution?.pessimistic ?? (a.duration ?? NaN) * 1.5;
       if (
         !validDuration(a.duration) &&
         !(a.distribution && typeof a.distribution.mostLikely === 'number')
       ) {
         issues.push({ activityId: a.id ?? null, field: 'duration', message: 'no usable duration; pert stats will be NaN', received: a.duration ?? null });
       }
-      const o = a.distribution?.optimistic ?? (a.duration ?? NaN) * 0.7;
-      const m = a.distribution?.mostLikely ?? a.duration ?? NaN;
-      const pe = a.distribution?.pessimistic ?? (a.duration ?? NaN) * 1.5;
+      // Raw distribution triples bypass the app's edit-mode validation, so
+      // ordering/positivity violations surface here as issues — the stats
+      // themselves come back NaN via pertStats' guard.
+      if (a.distribution) {
+        const d = a.distribution;
+        const dO = d.optimistic;
+        const dM = d.mostLikely;
+        const dP = d.pessimistic;
+        const badOrder =
+          (Number.isFinite(dO) && Number.isFinite(dM) && dO > dM) ||
+          (Number.isFinite(dM) && Number.isFinite(dP) && dM > dP);
+        const negative =
+          (Number.isFinite(dO) && dO < 0) ||
+          (Number.isFinite(dM) && dM < 0) ||
+          (Number.isFinite(dP) && dP < 0);
+        if (badOrder || negative) {
+          issues.push({
+            activityId: a.id ?? null,
+            field: 'distribution',
+            message: `estimates violate o <= m <= p with all values >= 0: optimistic=${dO}, mostLikely=${dM}, pessimistic=${dP}; pert stats will be NaN`
+          });
+        }
+      }
       return { id: a.id, name: a.name ?? a.id, ...pertStats(o, m, pe) };
     });
     const rollup = pertRollup(detailed);
