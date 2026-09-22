@@ -176,6 +176,26 @@ test('validDuration: shared policy rejects non-finite and non-positive', () => {
   assert.equal(validDuration(null), false);
 });
 
+test('cpmNetwork is pure: input objects are never mutated', () => {
+  const acts = [
+    { id: 'x', duration: 3, predecessors: ['y'] },
+    { id: 'y', duration: 5, predecessors: ['x'] }, // cyclic -> stays unresolved
+    { id: 'z', duration: 4, predecessors: [] }
+  ];
+  const snapshot = JSON.stringify(acts);
+  cpmNetwork(acts);
+  assert.equal(JSON.stringify(acts), snapshot, 'cyclic input must not gain schedule fields');
+  const clean = [
+    { id: 'a', duration: 3, predecessors: [] },
+    { id: 'b', duration: 2, predecessors: ['a'] }
+  ];
+  const cleanSnapshot = JSON.stringify(clean);
+  cpmNetwork(clean);
+  assert.equal(JSON.stringify(clean), cleanSnapshot, 'acyclic input must not gain schedule fields');
+  // Result activities are new objects, not the inputs.
+  assert.notEqual(cpmNetwork(clean).activities[0], clean[0]);
+});
+
 // ---------------------------------------------------------------------------
 // Monte Carlo
 // ---------------------------------------------------------------------------
