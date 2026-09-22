@@ -1,5 +1,8 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { handleRequest } from '../server.js';
 
 const req = (id, method, params) => ({ jsonrpc: '2.0', id, method, params });
@@ -109,5 +112,34 @@ describe('tool calls against bundled sample project', () => {
     const r = handleRequest(req(14, 'tools/call', { name: 'get_project', arguments: { project: 'ghost' } }));
     assert.equal(r.result.isError, true);
     assert.ok(r.result.content[0].text.includes('no project matching'));
+  });
+
+  test('critical_path surfaces duplicate-id issues from the project file', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pmo-mcp-dup-'));
+    const dupProject = JSON.stringify({
+      id: 'dup',
+      name: 'Duplicate Ids',
+      activities: [
+        { id: 'a', duration: 3, predecessors: [] },
+        { id: 'a', duration: 9, predecessors: [] },
+        { id: 'b', duration: 2, predecessors: ['a'] }
+      ]
+    });
+    fs.writeFileSync(path.join(dir, 'dup.json'), dupProject);
+    const prev = process.env.PMO_PROJECTS_DIR;
+    process.env.PMO_PROJECTS_DIR = dir;
+    try {
+      const r = handleRequest(req(15, 'tools/call', { name: 'critical_path', arguments: { project: 'dup' } }));
+      const payload = JSON.parse(r.result.content[0].text);
+      assert.ok(Array.isArray(payload.issues));
+      assert.ok(
+        payload.issues.some((i) => i.field === 'id' && /duplicate activity id 'a'/.test(i.message)),
+        `expected duplicate-id issue, got: ${JSON.stringify(payload.issues)}`
+      );
+    } finally {
+      if (prev === undefined) delete process.env.PMO_PROJECTS_DIR;
+      else process.env.PMO_PROJECTS_DIR = prev;
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

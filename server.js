@@ -16,7 +16,11 @@ import {
   cpmNetwork,
   runMonteCarlo,
   makeRng,
-  evmMetrics
+  evmMetrics,
+  validateActivities,
+  validDuration,
+  validPertOrdering,
+  round2
 } from './lib/calculators.js';
 import { listProjects, getProject, projectsDir } from './lib/projects.js';
 
@@ -47,7 +51,7 @@ const TOOLS = [
   {
     name: 'pert_estimate',
     description:
-      'PERT three-point estimates per activity plus roll-up and completion probability against an optional target duration (days).',
+      'PERT three-point estimates per activity plus roll-up and completion probability against an optional target duration (days). ASSUMPTION: the variance roll-up assumes activity durations are independent — correlated durations (shared resources, common risks) make the true project variance larger, so treat the roll-up and completion probability as optimistic in that case.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -154,24 +158,57 @@ const HANDLERS = {
     const issues = [];
     if (!acts.length) throw new Error(`project '${args.project}' has no activities`);
     const detailed = acts.map((a) => {
+      const o = a.distribution?.optimistic ?? (a.duration ?? NaN) * 0.7;
+      const m = a.distribution?.mostLikely ?? a.duration ?? NaN;
+      const pe = a.distribution?.pessimistic ?? (a.duration ?? NaN) * 1.5;
       if (
-        !(
-          typeof a.duration === 'number' && a.duration > 0
-        ) &&
+        !validDuration(a.duration) &&
         !(a.distribution && typeof a.distribution.mostLikely === 'number')
       ) {
         issues.push({ activityId: a.id ?? null, field: 'duration', message: 'no usable duration; pert stats will be NaN', received: a.duration ?? null });
       }
-      const o = a.distribution?.optimistic ?? (a.duration ?? NaN) * 0.7;
-      const m = a.distribution?.mostLikely ?? a.duration ?? NaN;
-      const pe = a.distribution?.pessimistic ?? (a.duration ?? NaN) * 1.5;
-      return { id: a.id, name: a.name ?? a.id, ...pertStats(o, m, pe) };
+      // Raw distribution triples bypass the app's edit-mode validation, so
+      // ordering/positivity violations surface here as issues — checked on
+      // the EFFECTIVE values (after duration-derived fallbacks), via the
+      // same shared predicate pertStats uses.
+      if (!validPertOrdering(o, m, pe)) {
+        issues.push({
+          activityId: a.id ?? null,
+          field: 'distribution',
+          message: `estimates violate optimistic <= mostLikely <= pessimistic with all values finite >= 0; pert stats will be NaN`,
+          received: { optimistic: o, mostLikely: m, pessimistic: pe }
+        });
+      }
+      const stats = pertStats(o, m, pe);
+      // Full precision flows into the rollup (which rounds once at its own
+      // boundary); per-activity display values are rounded here.
+      return {
+        id: a.id,
+        name: a.name ?? a.id,
+        ...stats
+      };
     });
     const rollup = pertRollup(detailed);
+    for (const id of rollup.skipped) {
+      issues.push({
+        activityId: id,
+        field: 'statistics',
+        message: `activity excluded from roll-up: expected/variance are not finite (invalid or missing estimates)`
+      });
+    }
+    const { skipped: _skipped, ...rollupStats } = rollup;
+    // Rollup has consumed the raw per-activity stats; round the activity
+    // display values now, at the response boundary.
+    const detailedDisplay = detailed.map((s) => ({
+      ...s,
+      expected: round2(s.expected),
+      variance: round2(s.variance),
+      stdDev: round2(s.stdDev)
+    }));
     const result = {
       project: p.name,
-      activities: detailed,
-      rollup,
+      activities: detailedDisplay,
+      rollup: rollupStats,
       read_only: true,
       issues
     };
@@ -188,9 +225,11 @@ const HANDLERS = {
     const p = loadOrFail(args.project);
     const acts = Array.isArray(p.activities) ? p.activities : [];
     if (!acts.length) throw new Error(`project '${args.project}' has no activities`);
+    const issues = validateActivities(acts);
     const net = cpmNetwork(structuredClone(acts));
     return {
       project: p.name,
+      ...(issues.length ? { issues } : {}),
       ...net,
       criticalActivities: net.activities.filter((a) => a.critical).map((a) => a.id),
       read_only: true
@@ -201,7 +240,13 @@ const HANDLERS = {
     const p = loadOrFail(args.project);
     const acts = Array.isArray(p.activities) ? p.activities : [];
     if (!acts.length) throw new Error(`project '${args.project}' has no activities`);
-    const iterations = Math.min(Math.max(Number(args.iterations) || 2000, 1), MAX_ITERATIONS);
+    // Coerce → default, floor fractional, clamp to [1, MAX_ITERATIONS].
+    // runMonteCarlo throws on non-integers, so floor before it sees the value.
+    // Default (2000) only for non-finite input — a floored finite value like
+    // 0.5 → 0 must clamp to 1, not silently become the full default.
+    const requested = Number(args.iterations);
+    const floored = Number.isFinite(requested) ? Math.floor(requested) : 2000;
+    const iterations = Math.min(Math.max(floored, 1), MAX_ITERATIONS);
     const result = runMonteCarlo({
       activities: structuredClone(acts),
       iterations,

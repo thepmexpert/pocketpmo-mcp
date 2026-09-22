@@ -5,7 +5,9 @@ import {
   makeRng,
   buildDistributions,
   runMonteCarlo,
-  evmMetrics
+  evmMetrics,
+  validateActivities,
+  validDuration
 } from '../lib/calculators.js';
 
 // ---------------------------------------------------------------------------
@@ -47,6 +49,23 @@ test('cpmNetwork: parallel branches give the shorter one float', () => {
   assert.equal(net.projectDuration, 12);
 });
 
+test('cpmNetwork: independent parallel terminal activities are not all critical', () => {
+  // Two unrelated terminal activities: only the longest defines the project
+  // duration, so the shorter one must carry float. Terminal lf = project
+  // duration, not the activity's own ef.
+  const acts = [
+    { id: 'A', duration: 10, predecessors: [] },
+    { id: 'B', duration: 5, predecessors: [] }
+  ];
+  const net = cpmNetwork(acts);
+  const byId = Object.fromEntries(net.activities.map((a) => [a.id, a]));
+  assert.equal(byId.A.critical, true);
+  assert.equal(byId.B.critical, false);
+  assert.equal(byId.B.float, 5);
+  assert.equal(byId.B.lf, 10); // project duration, not its own ef of 5
+  assert.equal(net.projectDuration, 10);
+});
+
 test('cpmNetwork: diamond dependency', () => {
   const acts = [
     { id: 's', duration: 2, predecessors: [] },
@@ -83,6 +102,104 @@ test('cpmNetwork: empty / non-array input is safe', () => {
   assert.deepEqual(cpmNetwork(null).activities, []);
 });
 
+test('cpmNetwork: simple cycle is reported as an explicit path', () => {
+  const acts = [
+    { id: 'a', duration: 3, predecessors: ['c'] },
+    { id: 'b', duration: 5, predecessors: ['a'] },
+    { id: 'c', duration: 2, predecessors: ['b'] },
+    { id: 'd', duration: 4, predecessors: [] }
+  ];
+  const net = cpmNetwork(acts);
+  assert.deepEqual(net.unresolved.sort(), ['a', 'b', 'c']);
+  assert.equal(net.cycles.length, 1);
+  const cycle = net.cycles[0];
+  assert.equal(cycle[0], cycle[cycle.length - 1]); // closes on itself
+  assert.deepEqual([...cycle].slice(0, -1).sort(), ['a', 'b', 'c']);
+  // The cycle-free part of the network still schedules normally.
+  assert.equal(net.projectDuration, 4);
+  assert.deepEqual(
+    net.activities.map((a) => a.id).sort(),
+    ['d']
+  );
+});
+
+test('cpmNetwork: activity downstream of a cycle is unresolved but not in any cycle', () => {
+  const acts = [
+    { id: 'a', duration: 3, predecessors: ['b'] },
+    { id: 'b', duration: 5, predecessors: ['a'] },
+    { id: 'c', duration: 2, predecessors: ['b'] } // depends on the cycle, not in it
+  ];
+  const net = cpmNetwork(acts);
+  assert.deepEqual(net.unresolved.sort(), ['a', 'b', 'c']);
+  assert.equal(net.cycles.length, 1);
+  const cycleNodes = new Set(net.cycles[0]);
+  assert.ok(cycleNodes.has('a') && cycleNodes.has('b'));
+  assert.equal(cycleNodes.has('c'), false); // c is downstream, not in the loop
+});
+
+test('validateActivities: cycles surface as issues with the path', () => {
+  const acts = [
+    { id: 'a', duration: 3, predecessors: ['c'] },
+    { id: 'b', duration: 5, predecessors: ['a'] },
+    { id: 'c', duration: 2, predecessors: ['b'] }
+  ];
+  const issues = validateActivities(acts);
+  const cycleIssues = issues.filter((i) => i.field === 'predecessors');
+  assert.equal(cycleIssues.length, 1);
+  assert.match(cycleIssues[0].message, /cycle detected: [abc] -> [abc] -> [abc] -> /);
+});
+
+test('cpmNetwork: Infinity duration does not poison the network', () => {
+  const acts = [
+    { id: 'a', duration: Infinity, predecessors: [] },
+    { id: 'b', duration: 4, predecessors: ['a'] }
+  ];
+  const net = cpmNetwork(structuredClone(acts));
+  assert.equal(net.projectDuration, 4); // not Infinity
+  assert.equal(Number.isFinite(net.activities[0].lf), true);
+  const issues = validateActivities(acts);
+  assert.ok(
+    issues.some((i) => i.activityId === 'a' && i.field === 'duration'),
+    'Infinity duration must be reported as an issue'
+  );
+});
+
+test('validDuration: shared policy rejects non-finite and non-positive', () => {
+  assert.equal(validDuration(5), true);
+  assert.equal(validDuration(0.5), true);
+  assert.equal(validDuration(Infinity), false);
+  assert.equal(validDuration(-Infinity), false);
+  assert.equal(validDuration(Number.NaN), false);
+  assert.equal(validDuration(0), false);
+  assert.equal(validDuration(-5), false);
+  assert.equal(validDuration('5'), false);
+  assert.equal(validDuration(null), false);
+});
+
+test('cpmNetwork is pure: input objects are never mutated', () => {
+  const acts = [
+    { id: 'x', duration: 3, predecessors: ['y'] },
+    { id: 'y', duration: 5, predecessors: ['x'] }, // cyclic -> stays unresolved
+    { id: 'z', duration: 4, predecessors: [] }
+  ];
+  const snapshot = JSON.stringify(acts);
+  const net = cpmNetwork(acts);
+  assert.equal(JSON.stringify(acts), snapshot, 'cyclic input must not gain schedule fields');
+  // Unresolved/cycle report still comes back; healthy component schedules.
+  assert.deepEqual(net.unresolved, ['x', 'y']);
+  assert.deepEqual(net.cycles, [['x', 'y', 'x']]);
+  assert.equal(net.projectDuration, 4);
+  const clean = [
+    { id: 'a', duration: 3, predecessors: [] },
+    { id: 'b', duration: 2, predecessors: ['a'] }
+  ];
+  const cleanSnapshot = JSON.stringify(clean);
+  cpmNetwork(clean);
+  assert.equal(JSON.stringify(clean), cleanSnapshot, 'acyclic input must not gain schedule fields');
+  // Result activities are new objects, not the inputs.
+  assert.notEqual(cpmNetwork(clean).activities[0], clean[0]);
+});
+
 // ---------------------------------------------------------------------------
 // Monte Carlo
 // ---------------------------------------------------------------------------
@@ -102,7 +219,8 @@ test('makeRng: different seeds diverge', () => {
 });
 
 test('buildDistributions: defaults triangular around base duration', () => {
-  const d = buildDistributions([{ id: 'x', duration: 10 }]);
+  const { distributions: d, issues } = buildDistributions([{ id: 'x', duration: 10 }]);
+  assert.equal(issues.length, 0);
   assert.deepEqual(d.x, {
     type: 'triangular',
     optimistic: 7,
@@ -114,12 +232,36 @@ test('buildDistributions: defaults triangular around base duration', () => {
 });
 
 test('buildDistributions: explicit distribution fields honoured', () => {
-  const d = buildDistributions([
+  const { distributions: d } = buildDistributions([
     { id: 'x', duration: 10, distribution: { min: 4, mode: 6, max: 20 } }
   ]);
   assert.equal(d.x.optimistic, 4);
   assert.equal(d.x.mostLikely, 6);
   assert.equal(d.x.pessimistic, 20);
+});
+
+test('buildDistributions: normalization repairs and reports', () => {
+  const { distributions: d, issues } = buildDistributions([
+    { id: 'out-of-order', duration: 10, distribution: { optimistic: 10, mostLikely: 5, pessimistic: 2 } },
+    { id: 'neg-stddev', duration: 10, distribution: { stdDev: -3 } },
+    { id: 'bad-type', duration: 10, distribution: { type: 'weibull' } },
+    { id: 'string-coerce', duration: 10, distribution: { mostLikely: '8' } }
+  ]);
+  // Out-of-order triple is sorted o <= m <= p and reported; exact repaired
+  // values pinned so a value-collapsing sort bug cannot pass.
+  const oo = d['out-of-order'];
+  assert.deepEqual([oo.optimistic, oo.mostLikely, oo.pessimistic], [2, 5, 10]);
+  // Negative stdDev repaired to the default and reported.
+  assert.equal(d['neg-stddev'].stdDev, 2);
+  // Unknown type coerced to triangular and reported.
+  assert.equal(d['bad-type'].type, 'triangular');
+  // Numeric strings coerced without an issue (valid normalization).
+  assert.equal(d['string-coerce'].mostLikely, 8);
+  const byId = Object.fromEntries(issues.map((i) => [i.activityId, i.field]));
+  assert.equal(byId['out-of-order'], 'distribution');
+  assert.equal(byId['neg-stddev'], 'distribution');
+  assert.equal(byId['bad-type'], 'distribution');
+  assert.equal(byId['string-coerce'], undefined);
 });
 
 test('runMonteCarlo: deterministic with same seed', () => {
@@ -149,6 +291,70 @@ test('runMonteCarlo: probability rises as target moves out', () => {
     assert.ok(probs[i] >= probs[i - 1], `P(${i}) should be >= P(${i - 1})`);
   }
   assert.ok(probs[probs.length - 1] > 0.9); // 15 days is near-certain
+});
+
+test('runMonteCarlo: target probabilities agree with the simulated percentiles', () => {
+  // probabilityByTarget must describe the SAME distribution as
+  // mean/percentiles (simulated CPM durations). P(t <= p50) must be ~0.5
+  // regardless of network shape — the old PERT-sum approximation (sum of
+  // per-activity means/variances) ignored topology and contradicted the
+  // percentiles whenever parallel paths existed.
+  const acts = [
+    { id: 'start', duration: 1, predecessors: [] },
+    { id: 'long', duration: 10, predecessors: ['start'] },
+    { id: 'short', duration: 3, predecessors: ['start'] },
+    { id: 'end', duration: 1, predecessors: ['long', 'short'] }
+  ];
+  const first = runMonteCarlo({ activities: structuredClone(acts), iterations: 2000 });
+  const p50 = first.percentiles.p50;
+
+  // Seeded RNG → second run reproduces the same simulated durations.
+  const second = runMonteCarlo({
+    activities: structuredClone(acts),
+    iterations: 2000,
+    targets: [p50 - 0.5, p50, p50 + 0.5]
+  });
+  const [below, at, above] = second.probabilityByTarget.map((t) => t.probability);
+  assert.ok(at > 0.4 && at < 0.6, `P(finish <= p50) should be ~0.5, got ${at}`);
+  assert.ok(above > at, `P(<= p50+0.5) ${above} should exceed P(<= p50) ${at}`);
+  assert.ok(below < at, `P(<= p50-0.5) ${below} should be below P(<= p50) ${at}`);
+});
+
+test('runMonteCarlo: iterations validation', () => {
+  const acts = [{ id: 'a', duration: 3, predecessors: [] }];
+  for (const bad of [2.5, 0, -5, Number.NaN, Number.POSITIVE_INFINITY, 'abc']) {
+    assert.throws(
+      () => runMonteCarlo({ activities: acts, iterations: bad }),
+      (e) => /positive safe integer/.test(e.message),
+      `should reject ${String(bad)}`
+    );
+  }
+  // String integer coerces and reports as a real integer.
+  const coerced = runMonteCarlo({ activities: acts, iterations: '1000' });
+  assert.equal(coerced.iterations, 1000);
+  assert.ok(Number.isSafeInteger(coerced.iterations));
+  // Max bound.
+  assert.throws(
+    () => runMonteCarlo({ activities: acts, iterations: 1_000_001 }),
+    /positive safe integer/
+  );
+});
+
+test('runMonteCarlo: duplicate activity ids are reported, never silent', () => {
+  // Two activities share id 'a' and 'b' references 'a'. Last-write-wins map
+  // resolution makes the network ambiguous; the response must carry the
+  // warning instead of silently returning incoherent stats (issue #4).
+  const r = runMonteCarlo({
+    activities: [
+      { id: 'a', duration: 3, predecessors: [] },
+      { id: 'a', duration: 9, predecessors: [] },
+      { id: 'b', duration: 2, predecessors: ['a'] }
+    ],
+    iterations: 500
+  });
+  const dup = r.issues.find((i) => i.field === 'id' && /duplicate/.test(i.message));
+  assert.ok(dup, 'duplicate id must produce an issue, got: ' + JSON.stringify(r.issues));
+  assert.equal(dup.activityId, 'a');
 });
 
 test('runMonteCarlo: the dominant branch owns the critical path', () => {
