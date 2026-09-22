@@ -201,10 +201,18 @@ const HANDLERS = {
       };
     });
     const rollup = pertRollup(detailed);
+    for (const id of rollup.skipped) {
+      issues.push({
+        activityId: id,
+        field: 'statistics',
+        message: `activity excluded from roll-up: expected/variance are not finite (invalid or missing estimates)`
+      });
+    }
+    const { skipped: _skipped, ...rollupStats } = rollup;
     const result = {
       project: p.name,
       activities: detailed,
-      rollup,
+      rollup: rollupStats,
       read_only: true,
       issues
     };

@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import {
   pertStats,
   pertRollup,
-  pertCompletionProbability
+  pertCompletionProbability,
+  round2
 } from '../lib/calculators.js';
 
 test('pertStats: golden case o=3 m=5 p=9', () => {
@@ -98,8 +99,23 @@ test('pertRollup: precision — rounded sum of raw values, not sum of rounded va
 test('pertRollup: empty list yields zeros', () => {
   const roll = pertRollup([]);
   assert.equal(roll.expected, 0);
-  assert.equal(roll.variance, 0);
-  assert.equal(roll.stdDev, 0);
+  assert.equal(roll.variance, 0);  assert.equal(roll.stdDev, 0);
+  assert.deepEqual(roll.skipped, []);
+});
+
+test('pertRollup: non-finite statistics are skipped and reported, not zero-coerced', () => {
+  const good = pertStats(3, 5, 9);
+  const acts = [
+    { id: 'a', ...good },
+    { id: 'bad-nan', expected: NaN, variance: NaN, stdDev: NaN },
+    { id: 'bad-null', expected: null, variance: undefined },
+    { id: 'bad-falsy', expected: '', variance: false }, // || 0 would swallow these silently
+    { id: 'half-valid', expected: good.expected, variance: NaN }
+  ];
+  const roll = pertRollup(acts);
+  assert.equal(roll.expected, round2(good.expected)); // only 'a' counted
+  assert.equal(roll.variance, round2(good.variance));
+  assert.deepEqual(roll.skipped.sort(), ['bad-falsy', 'bad-nan', 'bad-null', 'half-valid']);
 });
 
 test('pertCompletionProbability: z=0 gives 50%', () => {
