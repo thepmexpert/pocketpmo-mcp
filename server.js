@@ -16,7 +16,8 @@ import {
   cpmNetwork,
   runMonteCarlo,
   makeRng,
-  evmMetrics
+  evmMetrics,
+  validateActivities
 } from './lib/calculators.js';
 import { listProjects, getProject, projectsDir } from './lib/projects.js';
 
@@ -188,9 +189,11 @@ const HANDLERS = {
     const p = loadOrFail(args.project);
     const acts = Array.isArray(p.activities) ? p.activities : [];
     if (!acts.length) throw new Error(`project '${args.project}' has no activities`);
+    const issues = validateActivities(acts);
     const net = cpmNetwork(structuredClone(acts));
     return {
       project: p.name,
+      ...(issues.length ? { issues } : {}),
       ...net,
       criticalActivities: net.activities.filter((a) => a.critical).map((a) => a.id),
       read_only: true
