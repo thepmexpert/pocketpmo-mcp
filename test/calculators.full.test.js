@@ -49,30 +49,6 @@ test('cpmNetwork: parallel branches give the shorter one float', () => {
   assert.equal(net.projectDuration, 12);
 });
 
-test('cpmNetwork does not mutate its input (healthy and cyclic networks)', () => {
-  const healthy = [
-    { id: 'a', duration: 3, predecessors: [] },
-    { id: 'b', duration: 2, predecessors: ['a'] }
-  ];
-  const healthySnapshot = JSON.stringify(healthy);
-  cpmNetwork(healthy);
-  assert.equal(JSON.stringify(healthy), healthySnapshot, 'healthy input mutated');
-
-  const cyclic = [
-    { id: 'a', duration: 1, predecessors: ['b'] },
-    { id: 'b', duration: 1, predecessors: ['a'] },
-    { id: 'c', duration: 4, predecessors: [] }
-  ];
-  const cyclicSnapshot = JSON.stringify(cyclic);
-  const net = cpmNetwork(cyclic);
-  assert.equal(JSON.stringify(cyclic), cyclicSnapshot, 'cyclic input mutated');
-  // Stale scheduling fields must never appear on caller objects, and the
-  // unresolved/cycle report still comes back.
-  assert.deepEqual(net.unresolved, ['a', 'b']);
-  assert.deepEqual(net.cycles, [['a', 'b', 'a']]);
-  assert.equal(net.projectDuration, 4); // healthy component still schedules
-});
-
 test('cpmNetwork: independent parallel terminal activities are not all critical', () => {
   // Two unrelated terminal activities: only the longest defines the project
   // duration, so the shorter one must carry float. Terminal lf = project
@@ -207,8 +183,12 @@ test('cpmNetwork is pure: input objects are never mutated', () => {
     { id: 'z', duration: 4, predecessors: [] }
   ];
   const snapshot = JSON.stringify(acts);
-  cpmNetwork(acts);
+  const net = cpmNetwork(acts);
   assert.equal(JSON.stringify(acts), snapshot, 'cyclic input must not gain schedule fields');
+  // Unresolved/cycle report still comes back; healthy component schedules.
+  assert.deepEqual(net.unresolved, ['x', 'y']);
+  assert.deepEqual(net.cycles, [['x', 'y', 'x']]);
+  assert.equal(net.projectDuration, 4);
   const clean = [
     { id: 'a', duration: 3, predecessors: [] },
     { id: 'b', duration: 2, predecessors: ['a'] }
