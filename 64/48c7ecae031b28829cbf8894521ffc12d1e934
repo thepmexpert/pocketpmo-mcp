@@ -1,0 +1,14 @@
+lib/calculators.js
+  h_bb77324e13b22c 31
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "6448c7ecae031b28829cbf8894521ffc12d1e934",
+  "prompts": {},
+  "humans": {
+    "h_bb77324e13b22c": {
+      "author": "David <david4david4david4@gmail.com>"
+    }
+  }
+}
