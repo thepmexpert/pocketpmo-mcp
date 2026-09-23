@@ -963,6 +963,10 @@ test('#30 raw distributions: null activity never distorts statistics (round-4 P2
     iterations: 200
   });
   assert.equal(withNull.mean, clean.mean, `mean ${withNull.mean} must equal clean ${clean.mean} (no phantom path)`);
+  // Vacuous-pass guard (CodeRabbit round-5): the equality above is meaningless
+  // if BOTH runs skipped the valid activity (cpmNetwork([]) -> 0 == 0).
+  // Assert the clean run actually sampled: ~0.54, far above a 0-length path.
+  assert.ok(clean.mean > 0.45, `clean mean ${clean.mean} proves the activity was sampled`);
   assert.ok(withNull.issues.some((i) => i.field === 'id'), 'null entry still reported');
 });
 
