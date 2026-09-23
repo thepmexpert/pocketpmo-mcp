@@ -905,7 +905,13 @@ test('#30 raw distributions: negative stdDev and non-object spec are reported', 
     iterations: 200
   });
   assert.ok(r.issues.some((i) => i.activityId === 'a' && /negative stdDev/.test(i.message)));
-  assert.ok(r.issues.some((i) => i.activityId === 'b' && /not an object/.test(i.message)));
+  assert.ok(
+    r.issues.some((i) => i.activityId === 'b' && /not a distribution object/.test(i.message)),
+    'non-object spec must be reported: ' + JSON.stringify(r.issues)
+  );
+  // 'b' must still SAMPLE from its duration-derived default (5), not the
+  // 1-day fallback (CodeRabbit: partial maps must not understate duration).
+  assert.ok(r.mean > 3, `mean ${r.mean} reflects duration-derived defaults, not 1-day fallbacks`);
 });
 
 test('#30 raw distributions: clean specs stay untouched (no spurious issues)', () => {
@@ -952,7 +958,7 @@ test('#31 CPM: disconnected activities are independent components, each terminal
   assert.equal(byId.c.critical, false);
 });
 
-test('#31 MC: serial network sampled mean sits between deterministic min and PERT expectation', () => {
+test('#31 MC: serial network mean ≈ 2× single and stdDev exceeds it (variance accumulates)', () => {
   // Serial: variance accumulates by sum; compare against a single-activity run.
   const one = runMonteCarlo({ activities: [{ id: 'a', duration: 5, predecessors: [] }], iterations: 3000 });
   const serial = runMonteCarlo({
@@ -971,16 +977,19 @@ test('#31 MC: truncated normal never samples negative and is deterministic per s
   // mean 1, stdDev 3 -> ~37% of the pre-truncation mass is below zero; the
   // sampler truncates at 0, so every observed duration is >= 0 and the
   // empirical mean EXCEEDS the configured mean.
+  // Explicit rngs on BOTH runs (cubic: default IS makeRng(42), so a
+  // default-vs-explicit pair is identical by construction — vacuous).
   const r = runMonteCarlo({
     activities: [{ id: 'a', duration: 1, distribution: { type: 'normal', mean: 1, stdDev: 3 } }],
-    iterations: 20000
+    iterations: 20000,
+    rng: makeRng(7)
   });
   assert.ok(r.percentiles.p10 >= 0, 'no negative durations');
   assert.ok(r.mean > 1, `truncated mean ${r.mean} exceeds configured pre-truncation mean 1`);
   const r2 = runMonteCarlo({
     activities: [{ id: 'a', duration: 1, distribution: { type: 'normal', mean: 1, stdDev: 3 } }],
     iterations: 20000,
-    rng: makeRng(42)
+    rng: makeRng(7)
   });
   assert.equal(r.mean, r2.mean);
 });
@@ -1018,17 +1027,26 @@ test('#31 EVM: zero budget with complete milestones earns zero, metrics stay fin
 test('#31 EVM: DST spring-forward boundary does not distort date-only timeline math', () => {
   // US DST 2026: Mar 8. A 20-day schedule spanning it must still be exact
   // calendar days (UTC day arithmetic), not 23/25-hour wall-clock days.
-  const r = evmMetrics({
-    budget: 1000,
-    milestones: [{ id: 'm', percentage: 50, cost: 0, progress: 1 }],
-    startDate: '2026-03-01',
-    endDate: '2026-03-21',
-    statusDate: '2026-03-11' // exactly 10 of 20 days
-  });
-  assert.equal(r.timeline.projectDurationDays, 20);
-  assert.equal(r.timeline.elapsedDays, 10);
-  assert.ok(Math.abs(r.timeline.actualTimePercentage - 0.5) < 1e-9);
-  assert.ok(Math.abs(r.plannedValue - 500) < 1e-9);
+  // Pin a DST-observing TZ (cubic: a UTC CI runner can't catch local-time
+  // regressions) and restore it whatever happens.
+  const prevTZ = process.env.TZ;
+  process.env.TZ = 'America/New_York';
+  try {
+    const r = evmMetrics({
+      budget: 1000,
+      milestones: [{ id: 'm', percentage: 50, cost: 0, progress: 1 }],
+      startDate: '2026-03-01',
+      endDate: '2026-03-21',
+      statusDate: '2026-03-11' // exactly 10 of 20 days
+    });
+    assert.equal(r.timeline.projectDurationDays, 20);
+    assert.equal(r.timeline.elapsedDays, 10);
+    assert.ok(Math.abs(r.timeline.actualTimePercentage - 0.5) < 1e-9);
+    assert.ok(Math.abs(r.plannedValue - 500) < 1e-9);
+  } finally {
+    if (prevTZ === undefined) delete process.env.TZ;
+    else process.env.TZ = prevTZ;
+  }
 });
 
 test('#31 EVM: DST boundary via offset timestamps keeps sub-day precision', () => {
