@@ -800,6 +800,41 @@ test('sweep: impossible calendar date is reported, not silently rolled', () => {
   assert.equal(r.timeline.elapsedDays, 0);
 });
 
+test('sweep: slash-separated date is rejected by the strict format gate', () => {
+  const r = evmMetrics(
+    evmOpts({ statusDate: '2026/02/30' })
+  );
+  // V8 parses "2026/02/30" to March 2 — must never reach the timeline.
+  assert.ok(
+    r.issues.some(
+      (i) => i.field === 'dates' && /use YYYY-MM-DD or a timezone-qualified ISO timestamp/.test(i.message)
+    ),
+    `expected strict-format issue, got: ${JSON.stringify(r.issues)}`
+  );
+  assert.equal(r.timeline.elapsedDays, 0);
+});
+
+test('sweep: impossible date inside an offset timestamp is rejected', () => {
+  const r = evmMetrics(
+    evmOpts({ statusDate: '2026-02-30T10:00:00+01:00' })
+  );
+  assert.ok(
+    r.issues.some((i) => i.field === 'dates' && /impossible calendar date/.test(i.message)),
+    `expected impossible-date issue, got: ${JSON.stringify(r.issues)}`
+  );
+  assert.equal(r.timeline.elapsedDays, 0);
+});
+
+test('sweep: valid offset timestamp passes textual-calendar validation', () => {
+  const r = evmMetrics(
+    evmOpts({ statusDate: '2026-09-16T12:00:00+01:00' })
+  );
+  assert.ok(
+    !r.issues.some((i) => i.field === 'dates'),
+    `unexpected date issue on a valid offset timestamp: ${JSON.stringify(r.issues)}`
+  );
+});
+
 test('sweep: same-day timestamp schedule keeps sub-day precision', () => {
   const r = evmMetrics({
     budget: 1000,
