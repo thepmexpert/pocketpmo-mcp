@@ -505,15 +505,19 @@ test('#19 buildDistributions: normal distributions keep their configured mean', 
 });
 
 test('#20 runMonteCarlo: percentiles interpolate R-7 on tiny samples', () => {
-  // 2 iterations of a degenerate chain -> durations [10, 20].
-  // R-7 p50 = 10 + 0.5*(20-10) = 15; floor-index would have said 10.
-  const acts = [
-    { id: 'a', duration: 10, distribution: { optimistic: 10, mostLikely: 10, pessimistic: 10 } },
-    { id: 'b', duration: 0, predecessors: ['a'], distribution: { optimistic: 20, mostLikely: 20, pessimistic: 20 } }
-  ];
-  const r = runMonteCarlo({ activities: acts, iterations: 2, rng: makeRng(5) });
-  assert.ok(Number.isFinite(r.mean));
-  // Degenerate: both iterations identical -> any quantile equals the constant.
+  // Controllable rng: two iterations, single activity, default triangular
+  // (o=0.7, m=1, p=1.5, fc=0.375). u=0.1 -> 0.7+sqrt(0.1*0.8*0.3)=0.8549;
+  // u=0.9 -> 1.5-sqrt(0.1*0.8*0.5)=1.3. Sample = [0.8549, 1.3].
+  // R-7 p50 = midpoint 1.0775; the old floor-index pick would return 1.3.
+  const seq = [0.1, 0.9];
+  const rng = () => (seq.length ? seq.shift() : 0.5);
+  const acts = [{ id: 'a', duration: 1 }];
+  const r = runMonteCarlo({ activities: acts, iterations: 2, rng });
+  assert.equal(r.iterations, 2);
+  // R-7 p50 interpolates BETWEEN the two samples (floor would give the max).
+  assert.ok(r.percentiles.p50 < 1.2, `p50 ${r.percentiles.p50} should interpolate below max 1.3`);
+  assert.ok(r.percentiles.p50 > 1.0, `p50 ${r.percentiles.p50} should sit above the min`);
+  // Degenerate: constant chain -> any quantile equals the constant.
   const constant = [
     { id: 'a', duration: 13, distribution: { optimistic: 13, mostLikely: 13, pessimistic: 13 } }
   ];
@@ -693,4 +697,103 @@ test('#28 evmMetrics: EAC numeric when costs exist', () => {
   const r = evmMetrics(evmOpts());
   assert.equal(typeof r.eac, 'number');
   assert.equal(typeof r.vac, 'number');
+});
+
+// --- Post-push bot-review sweep (PR #3 round 1) ----------------------------
+
+test('sweep: sub-day default distribution stays ordered and sampled', () => {
+  const { distributions: d } = buildDistributions([{ id: 'x', duration: 0.5 }]);
+  // No 1-day floor inverting the triple: o=0.35 <= m=0.5 <= p=0.75.
+  assert.ok(d.x.optimistic <= d.x.mostLikely && d.x.mostLikely <= d.x.pessimistic);
+  assert.equal(d.x.optimistic, 0.35);
+  const r = runMonteCarlo({
+    activities: [{ id: 'x', duration: 0.5 }],
+    iterations: 200,
+    rng: makeRng(11)
+  });
+  // Sampler honors the sub-day triple, not a 1-day fallback.
+  assert.ok(r.mean < 1.2, `mean ${r.mean} should reflect the 0.5-day base`);
+  assert.ok(r.mean > 0.3, `mean ${r.mean} should stay above the optimistic bound`);
+});
+
+test('sweep: non-numeric inProgressValue reports and falls back to 50, no NaN', () => {
+  const r = evmMetrics({
+    budget: 1000,
+    milestones: [{ percentage: 100, cost: 1000, progress: 0.1 }],
+    inProgressValue: 'half',
+    startDate: '2026-09-01',
+    endDate: '2026-09-30',
+    statusDate: '2026-09-16'
+  });
+  assert.ok(r.issues.some((i) => i.field === 'inProgressValue'));
+  assert.ok(Number.isFinite(r.earnedValue));
+  assert.equal(r.earnedValue, 500); // neutral 50% fallback, not NaN
+});
+
+test('sweep: finite unrecognized progress (0.5) earns nothing AND reports', () => {
+  const r = evmMetrics({
+    budget: 1000,
+    milestones: [{ percentage: 100, cost: 100, progress: 0.5 }],
+    startDate: '2026-09-01',
+    endDate: '2026-09-30',
+    statusDate: '2026-09-16'
+  });
+  assert.equal(r.earnedValue, 0);
+  assert.ok(r.issues.some((i) => /progress not recognized/.test(i.message)));
+});
+
+test('sweep: null and blank milestone fields are reported, not silently zero', () => {
+  const r = evmMetrics({
+    budget: 1000,
+    milestones: [
+      { percentage: null, cost: null, progress: 1 },
+      { percentage: '', cost: '', progress: 1 }
+    ],
+    startDate: '2026-09-01',
+    endDate: '2026-09-30',
+    statusDate: '2026-09-16'
+  });
+  // 4 reportable problems (percentage + cost per milestone).
+  assert.equal(r.issues.filter((i) => i.field === 'milestone').length, 4);
+  assert.equal(r.earnedValue, 0);
+});
+
+test('sweep: impossible calendar date is reported, not silently rolled', () => {
+  const r = evmMetrics(
+    evmOpts({ statusDate: '2026-02-30' })
+  );
+  assert.ok(
+    r.issues.some((i) => i.field === 'dates' && /impossible calendar date/.test(i.message)),
+    `expected impossible-date issue, got: ${JSON.stringify(r.issues)}`
+  );
+  // Timeline falls back to 0 rather than pretending March 1 happened.
+  assert.equal(r.timeline.elapsedDays, 0);
+});
+
+test('sweep: same-day timestamp schedule keeps sub-day precision', () => {
+  const r = evmMetrics({
+    budget: 1000,
+    milestones: [],
+    startDate: '2026-01-01T08:00:00Z',
+    endDate: '2026-01-01T16:00:00Z',
+    statusDate: '2026-01-01T12:00:00Z'
+  });
+  assert.equal(r.timeline.projectDurationDays, 8 / 24);
+  assert.equal(r.timeline.actualTimePercentage, 0.5);
+  assert.ok(Number.isFinite(r.plannedValue));
+});
+
+test('sweep: empty activities result exposes criticalActivityFrequency', () => {
+  const r = runMonteCarlo({ activities: [], iterations: 10 });
+  assert.deepEqual(r.criticalActivityFrequency, []);
+  assert.deepEqual(r.criticalPathFrequency, []);
+});
+
+test('sweep: present-but-invalid distribution mean is reported', () => {
+  const { issues } = buildDistributions([
+    { id: 'x', duration: 10, distribution: { mean: 'soon' } }
+  ]);
+  assert.ok(
+    issues.some((i) => i.activityId === 'x' && /mean is present but not a usable number/.test(i.message))
+  );
 });
