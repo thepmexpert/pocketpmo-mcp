@@ -906,12 +906,45 @@ test('#30 raw distributions: negative stdDev and non-object spec are reported', 
   });
   assert.ok(r.issues.some((i) => i.activityId === 'a' && /negative stdDev/.test(i.message)));
   assert.ok(
-    r.issues.some((i) => i.activityId === 'b' && /not a distribution object/.test(i.message)),
+    r.issues.some((i) => i.activityId === 'b' && /not an object/.test(i.message)),
     'non-object spec must be reported: ' + JSON.stringify(r.issues)
   );
   // 'b' must still SAMPLE from its duration-derived default (5), not the
   // 1-day fallback (CodeRabbit: partial maps must not understate duration).
   assert.ok(r.mean > 3, `mean ${r.mean} reflects duration-derived defaults, not 1-day fallbacks`);
+});
+
+test('buildDistributions: non-object specs (primitives, arrays) are reported, not silent (cubic P2)', () => {
+  const { distributions: d, issues } = buildDistributions([
+    { id: 'p', duration: 10, distribution: 42 },
+    { id: 'q', duration: 10, distribution: 'abc' },
+    { id: 'r', duration: 10, distribution: [] }
+  ]);
+  for (const id of ['p', 'q', 'r']) {
+    assert.ok(
+      issues.some((i) => i.activityId === id && /not an object/.test(i.message)),
+      `non-object spec for ${id} must be reported: ` + JSON.stringify(issues)
+    );
+    // A rejected spec still maps to the duration-derived default triple —
+    // never a null entry, never a silently "valid-looking" normalized spec.
+    assert.equal(d[id].type, 'triangular', `d[${id}].type`);
+    assert.equal(d[id].optimistic, 7, `d[${id}].optimistic`);
+    assert.equal(d[id].mostLikely, 10, `d[${id}].mostLikely`);
+    assert.equal(d[id].pessimistic, 15, `d[${id}].pessimistic`);
+  }
+});
+
+test('#30 raw distributions: array spec is reported centrally and samples the default (cubic P2)', () => {
+  const r = runMonteCarlo({
+    activities: [{ id: 'a', duration: 4, predecessors: [] }],
+    distributions: { a: [] },
+    iterations: 200
+  });
+  assert.ok(
+    r.issues.some((i) => i.activityId === 'a' && /not an object/.test(i.message)),
+    'array spec must be reported centrally: ' + JSON.stringify(r.issues)
+  );
+  assert.ok(r.mean > 3, `mean ${r.mean} reflects the duration-derived default, not the 1-day fallback`);
 });
 
 test('#30 raw distributions: null activities return issues, never throw (round-3 P1)', () => {
