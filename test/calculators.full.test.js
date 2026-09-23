@@ -918,9 +918,10 @@ test('buildDistributions: non-object specs (primitives, arrays) are reported, no
   const { distributions: d, issues } = buildDistributions([
     { id: 'p', duration: 10, distribution: 42 },
     { id: 'q', duration: 10, distribution: 'abc' },
-    { id: 'r', duration: 10, distribution: [] }
+    { id: 'r', duration: 10, distribution: [] },
+    { id: 'n', duration: 10, distribution: null }
   ]);
-  for (const id of ['p', 'q', 'r']) {
+  for (const id of ['p', 'q', 'r', 'n']) {
     assert.ok(
       issues.some((i) => i.activityId === id && /not an object/.test(i.message)),
       `non-object spec for ${id} must be reported: ` + JSON.stringify(issues)
