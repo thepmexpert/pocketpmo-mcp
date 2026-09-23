@@ -711,8 +711,9 @@ test('sweep: sub-day default distribution stays ordered and sampled', () => {
     iterations: 200,
     rng: makeRng(11)
   });
-  // Sampler honors the sub-day triple, not a 1-day fallback.
-  assert.ok(r.mean < 1.2, `mean ${r.mean} should reflect the 0.5-day base`);
+  // Sampler honors the sub-day triple; the old 1-day fallback would give
+  // exactly mean 1, so the bound must exclude it.
+  assert.ok(r.mean < 1, `mean ${r.mean} should reflect the 0.5-day base, not the 1-day fallback`);
   assert.ok(r.mean > 0.3, `mean ${r.mean} should stay above the optimistic bound`);
 });
 
@@ -725,9 +726,38 @@ test('sweep: non-numeric inProgressValue reports and falls back to 50, no NaN', 
     endDate: '2026-09-30',
     statusDate: '2026-09-16'
   });
-  assert.ok(r.issues.some((i) => i.field === 'inProgressValue'));
+  assert.ok(
+    r.issues.some((i) => i.field === 'inProgressValue' && /not a usable number/.test(i.message))
+  );
   assert.ok(Number.isFinite(r.earnedValue));
   assert.equal(r.earnedValue, 500); // neutral 50% fallback, not NaN
+});
+
+test('sweep: naive timestamp (no offset) is rejected with a named issue', () => {
+  const r = evmMetrics({
+    budget: 1000,
+    milestones: [],
+    startDate: '2026-01-01T08:00:00', // no offset: host-TZ dependent
+    endDate: '2026-01-01T16:00:00Z',
+    statusDate: '2026-01-01T12:00:00Z'
+  });
+  assert.ok(
+    r.issues.some((i) => i.field === 'dates' && /no timezone offset/.test(i.message)),
+    `expected naive-timestamp issue, got: ${JSON.stringify(r.issues)}`
+  );
+  assert.equal(r.timeline.projectDurationDays, 0); // no TZ-dependent compute
+});
+
+test('sweep: sub-day distribution no longer fabricates an ordering violation', () => {
+  const r = runMonteCarlo({
+    activities: [{ id: 'a', duration: 0.5, distribution: { mostLikely: 0.4 } }],
+    iterations: 50,
+    rng: makeRng(3)
+  });
+  assert.ok(
+    !r.issues.some((i) => /violate optimistic/.test(i.message)),
+    `validateActivities must use the same floorless fallback as buildDistributions: ${JSON.stringify(r.issues)}`
+  );
 });
 
 test('sweep: finite unrecognized progress (0.5) earns nothing AND reports', () => {
