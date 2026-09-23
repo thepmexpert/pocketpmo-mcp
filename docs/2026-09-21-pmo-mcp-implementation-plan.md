@@ -88,8 +88,8 @@ float); diamond dependency. **Commit:** `feat: port CPM calculator`.
 - `buildDistributions(activities)`: per activity with id; explicit
   `distribution` object honoured (fields min/optimistic, mode/mostLikely,
   max/pessimistic, mean, stdDev); default triangular (o=0.7·d, m=d, p=1.5·d,
-  mean=d, stdDev=0.2·d, min o=1). Invalid durations fall back to 1 — reported,
-  not silent.
+  mean=(o+m+p)/3 ≈ 1.0667·d — the actual sampled mean, stdDev=0.2·d).
+  Invalid durations fall back to 1 — reported, not silent.
 - Triangular sampling: `o + rng()·(m−o) + rng()·(p−m)` resampled while rng() <
   (m−o)/(p−o) — matches the app's rejection shape; normal sampling via
   Box-Muller with seeded LCG (seeded ⇒ deterministic tests).
@@ -97,10 +97,11 @@ float); diamond dependency. **Commit:** `feat: port CPM calculator`.
   project duration per iteration as **CPM-based**: duration = max ef over
   activities after forward pass with sampled durations (this matches
   `calculateProjectDuration` semantics: longest path end, not naive max of
-  sampled durations). Collect percentiles p10/p50/p90, mean, stdDev,
-  probability of finishing by each requested target date (normal approximation
-  from results), top task-impact frequencies (share of iterations where the
-  activity sat on the critical path).
+  sampled durations). Collect percentiles p10/p50/p90 (R-7 quantiles,
+  matching the app's simple-statistics quantileSorted), mean, stdDev,
+  probability of finishing by each requested target date (empirical share
+  of simulated durations ≤ target), criticalActivityFrequency (share of
+  iterations where the activity sat on the critical path).
 - Input validation mirrors `validateMonteCarloActivities`: report issues, never
   fabricate silent stats.
 
@@ -116,7 +117,7 @@ activity dominates p90. **Commit:** `feat: port Monte Carlo engine`.
 - EV = Σ (budget·percentage/100) · (1 if complete, inProgressFraction if
   in-progress). AC = Σ cost · same multipliers. PV = budget ·
   actualTimePercentage where actualTimePercentage = elapsedDays/totalDays
-  clamped [0,1]. CPI = EV/AC; SPI = EV/PV; EAC = BAC/CPI; VAC = BAC−EAC.
+  clamped [0,1]. CPI = EV/AC; SPI = EV/PV; EAC = BAC/CPI; VAC = BAC−EAC. Dates: strict YYYY-MM-DD inputs use UTC calendar-day math, timestamps use instant arithmetic; impossible calendar dates ('2026-02-30') and unparseable values are reported in issues[]. EAC/VAC = null whenever CPI <= 0 (AC = 0 or EV = 0; matches calculateEvmAdvancedMetrics).
 - Invalid budget → 0s throughout, flagged in response `issues`.
 
 **Tests:** all-complete milestones → EV=BAC; halfway in-progress → fraction;
@@ -156,7 +157,7 @@ response), `tools/list`, `tools/call`. Unknown method → −32601. Handler erro
 4. `critical_path({project})` → CPM network: es/ef/ls/lf/float, critical flag,
    project duration
 5. `monte_carlo({project, iterations?, targets?})` → duration percentiles,
-   mean/stdDev, P(finish by target), critical-path frequency table
+   mean/stdDev, P(finish by target), criticalActivityFrequency table (per-activity criticality; criticalPathFrequency kept as deprecated alias)
    (iterations clamped ≤ 20000)
 6. `evm_metrics({project, statusDate?})` → PV/EV/AC/CPI/SPI/EAC/VAC + timeline
 7. `risk_register({project})` → risks with probability-impact score
