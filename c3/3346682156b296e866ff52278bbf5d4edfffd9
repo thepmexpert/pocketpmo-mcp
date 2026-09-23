@@ -1,0 +1,16 @@
+lib/calculators.js
+  h_9299a41dfabef3 394,787-791
+test/calculators.full.test.js
+  h_9299a41dfabef3 950-979
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "c33346682156b296e866ff52278bbf5d4edfffd9",
+  "prompts": {},
+  "humans": {
+    "h_9299a41dfabef3": {
+      "author": "David (via Wintermute) <iamasuperuser@users.noreply.github.com>"
+    }
+  }
+}
