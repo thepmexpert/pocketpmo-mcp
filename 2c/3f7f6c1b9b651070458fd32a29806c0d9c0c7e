@@ -1,0 +1,21 @@
+lib/calculators.js
+  s_3bf745a70b0293::t_2f160e933d5c8b 505-509
+test/calculators.full.test.js
+  s_3bf745a70b0293::t_db36267db84617 921-922,924
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "2c3f7f6c1b9b651070458fd32a29806c0d9c0c7e",
+  "prompts": {},
+  "sessions": {
+    "s_3bf745a70b0293": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f305a28cfffeqwWB0FZKoqPc4o",
+        "model": "glm-5.3-flash"
+      },
+      "human_author": "David <david4david4david4@gmail.com>"
+    }
+  }
+}
