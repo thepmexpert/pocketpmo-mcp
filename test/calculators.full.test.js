@@ -914,6 +914,39 @@ test('#30 raw distributions: negative stdDev and non-object spec are reported', 
   assert.ok(r.mean > 3, `mean ${r.mean} reflects duration-derived defaults, not 1-day fallbacks`);
 });
 
+test('#30 raw distributions: null activities return issues, never throw (round-3 P1)', () => {
+  const r = runMonteCarlo({
+    activities: [null, { id: 'a', duration: 5, predecessors: [] }],
+    distributions: { a: { min: 1, mode: 2, max: 3 } },
+    iterations: 100
+  });
+  assert.ok(r.issues.some((i) => i.field === 'id' && /missing id/.test(i.message)));
+  assert.ok(r.iterations === 100, 'run completes instead of throwing');
+});
+
+test('#30 raw distributions: unmatched keys are reported (round-3 P2)', () => {
+  const r = runMonteCarlo({
+    activities: [{ id: 'task', duration: 4, predecessors: [] }],
+    distributions: { task: { min: 1, mode: 2, max: 3 }, tsk: 42 },
+    iterations: 100
+  });
+  assert.ok(
+    r.issues.some((i) => /distribution key 'tsk' matches no activity id/.test(i.message)),
+    'unmatched key must be reported: ' + JSON.stringify(r.issues)
+  );
+});
+
+test('#30 raw distributions: unusable stdDev is reported before its fallback', () => {
+  const r = runMonteCarlo({
+    activities: [{ id: 'a', duration: 5, distribution: { type: 'normal', mean: 5, stdDev: 'invalid' } }],
+    iterations: 100
+  });
+  assert.ok(
+    r.issues.some((i) => i.activityId === 'a' && /stdDev is present but not a usable number/.test(i.message)),
+    JSON.stringify(r.issues)
+  );
+});
+
 test('#30 raw distributions: clean specs stay untouched (no spurious issues)', () => {
   // Vacuous-test guard: the fix must not alter well-formed input behavior.
   const acts = [{ id: 'a', duration: 5, predecessors: [] }];
