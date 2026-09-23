@@ -947,6 +947,36 @@ test('#30 raw distributions: unusable stdDev is reported before its fallback', (
   );
 });
 
+test('#30 raw distributions: null activity never distorts statistics (round-4 P2)', () => {
+  // cubic round-4: a null entry must not become a phantom parallel path —
+  // with duration 0.5, a phantom 1-day path would dominate and roughly
+  // double the mean.
+  const dists = { a: { min: 0.35, mode: 0.5, max: 0.75 } };
+  const withNull = runMonteCarlo({
+    activities: [null, { id: 'a', duration: 0.5, predecessors: [] }],
+    distributions: dists,
+    iterations: 200
+  });
+  const clean = runMonteCarlo({
+    activities: [{ id: 'a', duration: 0.5, predecessors: [] }],
+    distributions: dists,
+    iterations: 200
+  });
+  assert.equal(withNull.mean, clean.mean, `mean ${withNull.mean} must equal clean ${clean.mean} (no phantom path)`);
+  assert.ok(withNull.issues.some((i) => i.field === 'id'), 'null entry still reported');
+});
+
+test('#30 raw distributions: stdDev null is reported like other unusable fields (round-4 P2)', () => {
+  const r = runMonteCarlo({
+    activities: [{ id: 'a', duration: 5, distribution: { type: 'normal', mean: 5, stdDev: null } }],
+    iterations: 100
+  });
+  assert.ok(
+    r.issues.some((i) => i.activityId === 'a' && /stdDev is present but not a usable number/.test(i.message)),
+    'stdDev null must be reported: ' + JSON.stringify(r.issues)
+  );
+});
+
 test('#30 raw distributions: clean specs stay untouched (no spurious issues)', () => {
   // Vacuous-test guard: the fix must not alter well-formed input behavior.
   const acts = [{ id: 'a', duration: 5, predecessors: [] }];
