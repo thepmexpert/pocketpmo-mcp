@@ -8,10 +8,14 @@
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import os from 'node:os';
 import { writeFileSync, mkdirSync } from 'node:fs';
 
 const serverPath = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'server.js');
-const outPath = process.argv[2] || path.join(process.env.HOME, 'data/outputs/2026-09-21-pmo-mcp-demo.md');
+// os.homedir(), not process.env.HOME — HOME is undefined on Windows, and
+// path.join(undefined, ...) throws ERR_INVALID_ARG_TYPE (a crash), which
+// argv[2] would otherwise mask as "the demo is broken".
+const outPath = process.argv[2] || path.join(os.homedir(), 'data/outputs/2026-09-21-pmo-mcp-demo.md');
 
 const proc = spawn('node', [serverPath], { stdio: ['pipe', 'pipe', 'pipe'] });
 let buffer = '';

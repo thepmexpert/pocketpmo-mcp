@@ -16,9 +16,14 @@ Waffle is the staff.
 
 ```bash
 git clone <this repo> && cd pocketpmo-mcp   # no dependencies to install
-npm test                                     # 56 tests
+npm test                                     # 143 tests (needs Node ≥ 20 — see below)
 node demo/demo.mjs                           # end-to-end demo transcript
 ```
+
+> **Node version:** the server itself runs on Node ≥ 18 (zero-dep ESM, no
+> test-runner involvement). The **test suite** uses `node:test`'s
+> `describe`/`it` API, which exists from Node 18.6 (v16.17) but only left
+> its experimental phase in Node 20 — run `npm test` on Node ≥ 20.
 
 Serve over stdio (what MCP hosts launch):
 
@@ -106,7 +111,7 @@ lib/calculators.js  PERT · CPM · Monte Carlo · EVM (pure, documented ports)
 lib/projects.js     JSON export-file store (tolerant loader)
 data/               sample project fixture
 demo/demo.mjs       real-subprocess E2E demo → markdown transcript
-test/               56 tests (node:test, zero deps)
+test/               143 tests (node:test, zero deps; run on Node ≥ 20)
 ```
 
 ## Roadmap
