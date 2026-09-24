@@ -48,6 +48,24 @@ describe('tools', () => {
     assert.equal(r.result.isError, true);
   });
 
+  // Regression (review batch 4): inherited Object.prototype properties must
+  // not resolve as handlers. Plain `handlers[params.name]` lookup let a
+  // client invoke 'constructor' (returned {}), 'hasOwnProperty' (raw
+  // TypeError) or 'toString' instead of getting 'unknown tool'.
+  test('prototype-pollution tool names -> unknown tool, never executed', () => {
+    for (const name of ['constructor', '__proto__', 'hasOwnProperty', 'toString', 'valueOf']) {
+      const r = handleRequest(req(50, 'tools/call', { name, arguments: {} }));
+      assert.equal(r.result.isError, true, `${name} must be rejected in-band`);
+      assert.match(r.result.content[0].text, /^unknown tool:/);
+    }
+    // non-string names too — the typeof gate rejects them before the lookup
+    for (const name of [null, 42, { evil: true }, ['constructor']]) {
+      const r = handleRequest(req(51, 'tools/call', { name, arguments: {} }));
+      assert.equal(r.result.isError, true);
+      assert.match(r.result.content[0].text, /^unknown tool:/);
+    }
+  });
+
   test('invalid params -> -32602', () => {
     const r = handleRequest(req(6, 'tools/call', 'oops'));
     assert.equal(r.error.code, -32602);

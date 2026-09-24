@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { listProjects, getProject } from '../lib/projects.js';
+import { listProjects, getProject, projectsDir } from '../lib/projects.js';
 
 function makeTempDir(files) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pmo-mcp-test-'));
@@ -94,6 +94,49 @@ describe('getProject', () => {
       const { error } = getProject('nope');
       assert.ok(error.includes('no project matching'));
       assert.ok(error.includes('1'));
+    });
+  });
+
+  // Regression (review batch 4): a malformed file elsewhere in the dir must
+  // not block getProject for valid projects. Old code short-circuited on any
+  // listProjects warning, killing every project-specific tool.
+  test('malformed sibling file does not block lookups of valid projects', () => {
+    const dir = makeTempDir({
+      'alpha.json': good,
+      'corrupt.json': '{ not valid json',
+      'notes.json': 'null'
+    });
+    withDir(dir, () => {
+      // control: listProjects still reports the warnings
+      const { warnings } = listProjects();
+      assert.equal(warnings.length, 2);
+      // by id…
+      const byId = getProject('1');
+      assert.equal(byId.error, null);
+      assert.equal(byId.project.name, 'Alpha');
+      // …and by name
+      const byName = getProject('ALPHA');
+      assert.equal(byName.error, null);
+      assert.equal(byName.project.id, 1);
+    });
+  });
+
+  test('all-invalid-files error keeps parse warnings when NO valid project exists', () => {
+    const dir = makeTempDir({ 'corrupt.json': '{ not valid json' });
+    withDir(dir, () => {
+      const { project, error } = getProject('1');
+      assert.equal(project, null);
+      assert.ok(error.startsWith('no project files in'));
+      assert.ok(error.includes('failed to parse'), 'diagnostics preserved in error');
+    });
+  });
+
+  test('unreadable dir reports the readdir cause once, not a double path', () => {
+    withDir('/nonexistent/pmo-dir-xyz', () => {
+      const { project, error } = getProject('1');
+      assert.equal(project, null);
+      assert.ok(error.startsWith('projects dir not readable:'), `got: ${error}`);
+      assert.equal(error.split(projectsDir()).length - 1, 1, 'path appears once');
     });
   });
 });

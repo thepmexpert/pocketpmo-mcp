@@ -329,8 +329,14 @@ export function handleRequest(request, handlers = HANDLERS) {
     if (!params || typeof params !== 'object') {
       return { jsonrpc: '2.0', id, error: { code: -32602, message: 'invalid params: expected an object' } };
     }
+    // Object.hasOwn rejects inherited properties ('constructor',
+    // 'toString', 'hasOwnProperty', '__proto__'), which a plain lookup
+    // would resolve off Object.prototype — a malicious client could
+    // invoke inherited functions instead of getting 'unknown tool'.
+    if (typeof params.name !== 'string' || !Object.hasOwn(handlers, params.name)) {
+      return { jsonrpc: '2.0', id, result: errorResult(`unknown tool: ${params.name}`) };
+    }
     const handler = handlers[params.name];
-    if (!handler) return { jsonrpc: '2.0', id, result: errorResult(`unknown tool: ${params.name}`) };
     try {
       return { jsonrpc: '2.0', id, result: textResult(handler(params.arguments ?? {})) };
     } catch (error) {
