@@ -479,6 +479,52 @@ describe('project repository: refresh / invalidate / facade', () => {
     });
   });
 
+  test('diagnostics reports the EFFECTIVE limits, including env overrides', () => {
+    const dir = makeTempDir({ 'alpha.json': good });
+    withEnv('PMO_CACHE_MAX_BYTES', '4096', () => {
+      withEnv('PMO_CACHE_MAX_ENTRIES', '7', () => {
+        withDir(dir, () => {
+          refresh();
+          const d = diagnostics();
+          assert.equal(d.maxBytes, 4096, 'effective byte limit, not the default');
+          assert.equal(d.maxEntries, 7, 'effective entry limit, not the default');
+        });
+      });
+    });
+  });
+
+  test('getProject stops resolving at the match (files after it are not opened)', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pmo-mcp-earlyexit-'));
+    try {
+      // 'alpha.json' sorts BEFORE 'z-big.json': a full scan would gate-skip
+      // the oversized file and bump `skips`. An early-exit match never
+      // reaches it — skips must stay untouched.
+      fs.writeFileSync(path.join(dir, 'alpha.json'), good);
+      fs.writeFileSync(
+        path.join(dir, 'z-big.json'),
+        '{"id":"big","name":"Big","pad":"' + 'x'.repeat(10 * 1024 * 1024) + '"}'
+      );
+      withDir(dir, () => {
+        refresh();
+        const d0 = diagnostics();
+        const { project, error } = getProject('alpha');
+        const d1 = diagnostics();
+        assert.equal(error, null);
+        assert.equal(project.id, 1);
+        assert.equal(d1.skips - d0.skips, 0, 'no gate work after the matched file');
+        assert.equal(d1.misses - d0.misses, 1, 'only the matched file was read');
+        // Full scans still classify the oversized file — same dir, full pass.
+        const full = listProjects();
+        const d2 = diagnostics();
+        assert.equal(full.projects.length, 1, 'oversized file is not a project');
+        assert.equal(full.warnings.length, 1);
+        assert.equal(d2.skips - d1.skips, 1, 'a full scan does reach it');
+      });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test('projectRepository facade exposes the finding-#2 architecture', () => {
     const dir = makeTempDir({ 'alpha.json': good });
     withDir(dir, () => {
@@ -547,12 +593,16 @@ describe('project repository: directory churn', () => {
         assert.ok(d1.evictions - d0.evictions >= 2, 'budget overflow evicted entries');
         assert.ok(d1.entries <= 1, 'a 1-byte budget holds at most the newest entry');
         // Next scan must re-parse the evicted files (budget still active).
+        // Per-insert enforcement means a 1-byte budget thrashes by design:
+        // each new insert evicts the previous entry, so nothing survives
+        // as a cache hit — the pins here are correctness (all projects
+        // listed) plus the eviction/re-parse behavior, never hit counts.
         const d2 = diagnostics();
         const second = listProjects();
         const d3 = diagnostics();
         assert.equal(second.projects.length, 3);
-        assert.ok(d3.misses - d2.misses >= 2, 'evicted files re-parse on the next scan');
-        assert.ok(d3.hits - d2.hits >= 1, 'the newest entry survived');
+        assert.equal(d3.misses - d2.misses, 3, 'every file re-parses under a thrashing budget');
+        assert.equal(d3.entries <= 1, true, 'cache still capped after the second scan');
       });
     });
   });
