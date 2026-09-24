@@ -211,9 +211,10 @@ describe('review batch 5 hardening', () => {
         return written.length !== 1; // first write: full buffer
       },
       once(event, cb) {
-        assert.equal(event, 'drain');
-        releaseDrain = cb;
-      }
+        assert.ok(['drain', 'error', 'close'].includes(event), `unexpected event: ${event}`);
+        if (event === 'drain') releaseDrain = cb;
+      },
+      off() {} // no-op: tests don't fire error/close
     };
     const { serve } = await import('../server.js');
     const { PassThrough } = await import('node:stream');

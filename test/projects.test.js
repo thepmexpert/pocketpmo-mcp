@@ -177,19 +177,36 @@ describe('review batch 5 hardening', () => {
 
   test('oversized files are skipped with a warning, never read', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pmo-mcp-big-'));
-    // Build a >10MB file without reading it back (block-write via createWriteStream
-    // is async; use a sparse-ish repeated string just over the cap)
-    const big = '{"id":"big","name":"Big","pad":"' + 'x'.repeat(10 * 1024 * 1024) + '"}';
-    fs.writeFileSync(path.join(dir, 'big.json'), big);
-    fs.writeFileSync(path.join(dir, 'small.json'), good);
-    withDir(dir, () => {
-      const { projects, warnings } = listProjects();
-      assert.equal(projects.length, 1, 'only the small project is listed');
-      assert.equal(projects[0].id, '1');
-      assert.equal(warnings.length, 1);
-      assert.match(warnings[0], /^file too large \(\d+ bytes/);
-      assert.match(warnings[0], /big\.json/);
-    });
+    try {
+      // Build a >10MB file just over the cap
+      const big = '{"id":"big","name":"Big","pad":"' + 'x'.repeat(10 * 1024 * 1024) + '"}';
+      fs.writeFileSync(path.join(dir, 'big.json'), big);
+      fs.writeFileSync(path.join(dir, 'small.json'), good);
+      withDir(dir, () => {
+        // Regression tripwire: the read path must never pull the oversized
+        // file's content into memory. If a future refactor reintroduces a
+        // blind readFileSync, this fails with the file's size in the message.
+        const origReadFileSync = fs.readFileSync;
+        let bigReads = 0;
+        fs.readFileSync = function spied(filePath, ...rest) {
+          if (String(filePath).endsWith('big.json')) bigReads++;
+          return origReadFileSync.call(fs, filePath, ...rest);
+        };
+        try {
+          const { projects, warnings } = listProjects();
+          assert.equal(projects.length, 1, 'only the small project is listed');
+          assert.equal(projects[0].id, '1');
+          assert.equal(warnings.length, 1);
+          assert.match(warnings[0], /^file too large \(\d+ bytes/);
+          assert.match(warnings[0], /big\.json/);
+          assert.equal(bigReads, 0, 'oversized file must never be read');
+        } finally {
+          fs.readFileSync = origReadFileSync;
+        }
+      });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   test('symlinked .json files are skipped with a warning, not followed', () => {
@@ -244,9 +261,6 @@ describe('review batch 5 hardening', () => {
       const edited = JSON.parse(good);
       edited.status = 'updated';
       fs.writeFileSync(filePath, JSON.stringify(edited));
-      const { atime, mtime } = fs.statSync(filePath);
-      const future = new Date(mtime.getTime() + 5000);
-      fs.utimesSync(filePath, atime, future);
       const third = getProject('alpha');
       assert.equal(third.error, null);
       assert.notEqual(third.project, first.project, 'edited file must not come from cache');

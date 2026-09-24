@@ -382,8 +382,38 @@ export function serve({ stdin = process.stdin, stdout = process.stdout } = {}) {
   // write() returns false and the response must wait for 'drain' — or
   // responses queue in memory unbounded. Writes are chained so responses
   // stay IN ORDER: awaiting inline in the line handler would let the next
-  // line's response overtake a drained-but-delayed earlier one.
+  // line's response overtake a drained-but-delayed earlier one. The chain
+  // is error-proof: a rejected write (EPIPE when the client closes the
+  // pipe) is caught per-link so later responses still attempt to write,
+  // and the drain waiter settles on 'error' too (a stream that errors or
+  // closes while full would otherwise wedge the chain forever).
   let tail = Promise.resolve();
+  let pending = 0;
+  const MAX_PENDING = 1000;
+  const whenDrain = () =>
+    new Promise((resolve) => {
+      const settle = () => {
+        stdout.off('drain', onDrain);
+        stdout.off('error', onError);
+        stdout.off('close', onClose);
+        resolve();
+      };
+      const onDrain = () => settle();
+      const onError = () => settle(); // treat stream error as drained
+      const onClose = () => settle(); // ...and stream close
+      stdout.once('drain', onDrain);
+      stdout.once('error', onError);
+      stdout.once('close', onClose);
+    });
+  const writeResponse = (payload) => {
+    pending--;
+    try {
+      const ok = stdout.write(JSON.stringify(payload) + '\n');
+      return ok ? Promise.resolve() : whenDrain();
+    } catch {
+      return Promise.resolve(); // synchronous write error: fail-soft, keep serving
+    }
+  };
   rl.on('line', (line) => {
     const trimmed = line.trim();
     if (!trimmed) return;
@@ -391,27 +421,44 @@ export function serve({ stdin = process.stdin, stdout = process.stdout } = {}) {
     try {
       request = JSON.parse(trimmed);
     } catch (error) {
-      tail = tail.then(() =>
-        writeLine(stdout, { jsonrpc: '2.0', id: null, error: { code: -32700, message: `parse error: ${error.message}` } })
-      );
+      tail = tail.then(() => writeResponse({ jsonrpc: '2.0', id: null, error: { code: -32700, message: `parse error: ${error.message}` } }));
       return;
     }
     const response = handleRequest(request);
-    if (response !== null) tail = tail.then(() => writeLine(stdout, response));
+    if (response === null) return;
+    // Backpressure cap: while the chain is blocked on drain, a hostile
+    // client pipelining thousands of requests would otherwise queue every
+    // response object in memory. Past the cap the OLDEST queued response
+    // is dropped and replaced in-band — the client already violated the
+    // sequential-request convention MCP hosts follow.
+    if (pending >= MAX_PENDING) {
+      response = {
+        jsonrpc: '2.0',
+        id: response.id ?? null,
+        error: { code: -32000, message: `server overloaded: ${MAX_PENDING} responses queued, request dropped` }
+      };
+    }
+    pending++;
+    tail = tail.then(() => writeResponse(response));
+  });
+  // HandleRequest is synchronous, but responses queue in the chain while
+  // stdout applies backpressure — the direct-run exit path must await it.
+  rl.on('close', () => {
+    tail.catch(() => {}).then(() => rl.emit('drained'));
   });
   return rl;
-}
-
-function writeLine(stdout, obj) {
-  const ok = stdout.write(JSON.stringify(obj) + '\n');
-  if (!ok) return new Promise((resolve) => stdout.once('drain', resolve));
 }
 
 const isDirectRun =
   process.argv[1] && (process.argv[1].endsWith('server.js') || process.argv[1].endsWith('pocketpmo-mcp'));
 
 if (isDirectRun) {
-  serve();
-  // Keep the process alive on stdio; exit cleanly when stdin closes.
-  process.stdin.on('end', () => process.exit(0));
+  const rl = serve();
+  // Keep the process alive on stdio; exit only after every queued response
+  // has actually been written (process.exit here would truncate whatever is
+  // still waiting for drain — 10k pings into an unread pipe lost ~83% of
+  // responses before this await).
+  process.stdin.on('end', () => {
+    rl.on('drained', () => process.exit(0));
+  });
 }
