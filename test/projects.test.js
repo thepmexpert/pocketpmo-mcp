@@ -4,7 +4,15 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { listProjects, getProject, projectsDir } from '../lib/projects.js';
+import {
+  listProjects,
+  getProject,
+  projectsDir,
+  refresh,
+  invalidate,
+  diagnostics,
+  projectRepository
+} from '../lib/projects.js';
 
 function makeTempDir(files) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pmo-mcp-test-'));
@@ -22,6 +30,17 @@ function withDir(dir, fn) {
   } finally {
     if (prev === undefined) delete process.env.PMO_PROJECTS_DIR;
     else process.env.PMO_PROJECTS_DIR = prev;
+  }
+}
+
+function withEnv(key, value, fn) {
+  const prev = process.env[key];
+  process.env[key] = value;
+  try {
+    fn();
+  } finally {
+    if (prev === undefined) delete process.env[key];
+    else process.env[key] = prev;
   }
 }
 
@@ -210,6 +229,7 @@ describe('review batch 5 hardening', () => {
   });
 
   test('symlinked .json files are skipped with a warning, not followed', () => {
+    if (process.platform === 'win32') return; // symlinkSync needs privileges on stock Windows
     const dir = makeTempDir({ 'alpha.json': good });
     const secret = path.join(os.tmpdir(), `pmo-mcp-secret-${process.pid}.json`);
     fs.writeFileSync(secret, JSON.stringify({ id: 'evil', name: 'Evil', root: 'hash' }));
@@ -314,6 +334,383 @@ describe('parse cache ctime key', () => {
         const again = getProject('x');
         assert.equal(again.error, null);
         assert.equal(again.project.pad, 'bbbb', 'same-size same-mtime rewrite must not be served from cache');
+      });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Project repository (speed review, finding #2): cache observability,
+// refresh/invalidate, duplicate names, deleted-file eviction, portfolio scale.
+// All counter assertions use DELTAS: the parse cache and its counters are
+// module-level and shared across this whole test file.
+// ---------------------------------------------------------------------------
+
+const beta = JSON.stringify({
+  id: 2,
+  name: 'Beta',
+  activities: [{ id: 'y', duration: 3, predecessors: [] }],
+  risks: [],
+  evmData: { milestones: [] }
+});
+
+describe('project repository: cache observability', () => {
+  test('repeated listProjects calls do not re-read unchanged files', () => {
+    const dir = makeTempDir({ 'alpha.json': good, 'beta.json': beta });
+    withDir(dir, () => {
+      refresh();
+      const d0 = diagnostics();
+      listProjects();
+      const d1 = diagnostics();
+      assert.equal(d1.misses - d0.misses, 2, 'first scan parses each file exactly once');
+      assert.equal(d1.skips - d0.skips, 0);
+      listProjects();
+      const d2 = diagnostics();
+      assert.equal(d2.hits - d1.hits, 2, 'second scan is served from cache');
+      assert.equal(d2.misses - d1.misses, 0, 'unchanged files are not re-read');
+    });
+  });
+
+  test('exactly the changed file is re-read after an edit', () => {
+    const dir = makeTempDir({ 'alpha.json': good, 'beta.json': beta });
+    withDir(dir, () => {
+      refresh();
+      listProjects();
+      listProjects();
+      const d0 = diagnostics();
+      const edited = JSON.parse(beta);
+      edited.status = 'updated';
+      fs.writeFileSync(path.join(dir, 'beta.json'), JSON.stringify(edited));
+      listProjects();
+      const d1 = diagnostics();
+      assert.equal(d1.misses - d0.misses, 1, 'only the edited file is re-parsed');
+      assert.equal(d1.hits - d0.hits, 1, 'the untouched file stays a cache hit');
+    });
+  });
+
+  test('malformed parse failures are cached verdicts; valid files unaffected', () => {
+    const dir = makeTempDir({ 'alpha.json': good, 'bad.json': '{not json' });
+    withDir(dir, () => {
+      refresh();
+      const first = listProjects();
+      assert.equal(first.projects.length, 1);
+      assert.equal(first.warnings.length, 1);
+      const d0 = diagnostics();
+      const second = listProjects();
+      const d1 = diagnostics();
+      assert.equal(second.warnings.length, 1, 'the warning is still reported');
+      assert.equal(d1.hits - d0.hits, 2, 'parse-failure verdict is cached too');
+      assert.equal(d1.misses - d0.misses, 0, 'malformed file is not re-parsed');
+    });
+  });
+
+  test('gate-skipped files are re-checked every scan (never cached)', () => {
+    // Rule 36: never cache gate failures. A symlink that is later replaced
+    // by a real file must be picked up on the next scan, so skips cannot
+    // produce cached verdicts — pinned here via the skips counter.
+    if (process.platform === 'win32') return; // symlinkSync needs privileges on stock Windows
+    const dir = makeTempDir({ 'alpha.json': good });
+    const secret = path.join(os.tmpdir(), `pmo-mcp-secret-${process.pid}-2.json`);
+    fs.writeFileSync(secret, '{"id":"evil","name":"Evil"}');
+    fs.symlinkSync(secret, path.join(dir, 'evil.json'));
+    try {
+      withDir(dir, () => {
+        refresh();
+        listProjects();
+        const d0 = diagnostics();
+        listProjects();
+        const d1 = diagnostics();
+        assert.equal(d1.hits - d0.hits, 1, 'valid file is a cache hit');
+        assert.equal(d1.misses - d0.misses, 0);
+        assert.equal(d1.skips - d0.skips, 1, 'symlink is re-verified every scan');
+      });
+    } finally {
+      fs.rmSync(secret, { force: true });
+    }
+  });
+});
+
+describe('project repository: refresh / invalidate / facade', () => {
+  test('refresh() forces the next access to re-read from disk', () => {
+    const dir = makeTempDir({ 'alpha.json': good });
+    withDir(dir, () => {
+      refresh();
+      const first = getProject('alpha');
+      assert.equal(first.error, null);
+      const d0 = diagnostics();
+      const cleared = refresh();
+      const d1 = diagnostics();
+      assert.ok(cleared >= 1, 'refresh reports how many entries it dropped');
+      assert.equal(d1.evictions - d0.evictions, cleared, 'manual drops are counted as evictions');
+      assert.equal(diagnostics().entries, 0, 'cache is empty after refresh');
+      const d2 = diagnostics();
+      const second = getProject('alpha');
+      const d3 = diagnostics();
+      assert.equal(second.error, null);
+      assert.notEqual(second.project, first.project, 'a fresh parse, not the old object');
+      assert.equal(d3.misses - d2.misses, 1, 'refresh forces exactly one re-read');
+    });
+  });
+
+  test('cache limits are clamped to sane minimums (no impossible caps)', () => {
+    const dir = makeTempDir({ 'alpha.json': good });
+    withEnv('PMO_CACHE_MAX_ENTRIES', '0.5', () => {
+      withEnv('PMO_CACHE_MAX_BYTES', '0.25', () => {
+        withDir(dir, () => {
+          refresh();
+          const d = diagnostics();
+          assert.equal(d.maxEntries, 1, 'fractional entry limit clamps to 1');
+          assert.equal(d.maxBytes, 1, 'fractional byte limit clamps to 1');
+          const { project, error } = getProject('alpha');
+          assert.equal(error, null, 'lookups stay correct under an absurd limit');
+          assert.equal(project.id, 1);
+        });
+      });
+    });
+  });
+
+  test('invalidate() drops exactly one entry; unknown path returns false', () => {
+    const dir = makeTempDir({ 'alpha.json': good, 'beta.json': beta });
+    withDir(dir, () => {
+      refresh();
+      const cachedBefore = getProject('beta').project; // identity of the cached parse
+      listProjects();
+      assert.equal(diagnostics().entries, 2);
+      assert.equal(invalidate(path.join(dir, 'beta.json')), true);
+      assert.equal(diagnostics().entries, 1, 'only the targeted entry is gone');
+      const after = getProject('beta').project;
+      assert.notEqual(after, cachedBefore, 'invalidated entry forces a re-read');
+      assert.equal(invalidate(path.join(dir, 'gamma.json')), false, 'unknown path has no entry');
+    });
+  });
+
+  test('invalidate() canonicalizes absolute paths with .. segments', () => {
+    const dir = makeTempDir({ 'alpha.json': good, 'beta.json': beta });
+    withDir(dir, () => {
+      refresh();
+      listProjects();
+      assert.equal(diagnostics().entries, 2);
+      // Raw '..' spelling — join() would normalize it away, so build the
+      // string directly. resolve() must map it onto the canonical key.
+      assert.equal(invalidate(dir + '/subdir/../beta.json'), true);
+      assert.equal(diagnostics().entries, 1, 'the equivalent canonical entry is gone');
+    });
+  });
+
+  test('diagnostics reports the EFFECTIVE limits, including env overrides', () => {
+    const dir = makeTempDir({ 'alpha.json': good });
+    withEnv('PMO_CACHE_MAX_BYTES', '4096', () => {
+      withEnv('PMO_CACHE_MAX_ENTRIES', '7', () => {
+        withDir(dir, () => {
+          refresh();
+          const d = diagnostics();
+          assert.equal(d.maxBytes, 4096, 'effective byte limit, not the default');
+          assert.equal(d.maxEntries, 7, 'effective entry limit, not the default');
+        });
+      });
+    });
+  });
+
+  test('getProject stops resolving at the match (files after it are not opened)', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pmo-mcp-earlyexit-'));
+    try {
+      // 'alpha.json' sorts BEFORE 'z-big.json': a full scan would gate-skip
+      // the oversized file and bump `skips`. An early-exit match never
+      // reaches it — skips must stay untouched.
+      fs.writeFileSync(path.join(dir, 'alpha.json'), good);
+      fs.writeFileSync(
+        path.join(dir, 'z-big.json'),
+        '{"id":"big","name":"Big","pad":"' + 'x'.repeat(10 * 1024 * 1024) + '"}'
+      );
+      withDir(dir, () => {
+        refresh();
+        const d0 = diagnostics();
+        const { project, error } = getProject('alpha');
+        const d1 = diagnostics();
+        assert.equal(error, null);
+        assert.equal(project.id, 1);
+        assert.equal(d1.skips - d0.skips, 0, 'no gate work after the matched file');
+        assert.equal(d1.misses - d0.misses, 1, 'only the matched file was read');
+        // Full scans still classify the oversized file — same dir, full pass.
+        const full = listProjects();
+        const d2 = diagnostics();
+        assert.equal(full.projects.length, 1, 'oversized file is not a project');
+        assert.equal(full.warnings.length, 1);
+        assert.equal(d2.skips - d1.skips, 1, 'a full scan does reach it');
+      });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('projectRepository facade exposes the finding-#2 architecture', () => {
+    const dir = makeTempDir({ 'alpha.json': good });
+    withDir(dir, () => {
+      for (const method of ['listProjects', 'getProject', 'refresh', 'invalidate', 'diagnostics']) {
+        assert.equal(typeof projectRepository[method], 'function', `facade has ${method}`);
+      }
+      refresh();
+      const { projects, warnings } = projectRepository.listProjects();
+      assert.equal(warnings.length, 0);
+      assert.equal(projects.length, 1);
+      const { project, error } = projectRepository.getProject('alpha');
+      assert.equal(error, null);
+      assert.equal(project.id, 1);
+      assert.equal(typeof projectRepository.diagnostics().entries, 'number');
+      assert.equal(projectRepository.invalidate(path.join(dir, 'alpha.json')), true);
+      assert.ok(projectRepository.refresh() >= 0);
+    });
+  });
+});
+
+describe('project repository: directory churn', () => {
+  test('a file that transitions into a gate-skip state drops its stale cache entry', () => {
+    // cubic round 1: gates run BEFORE the cache lookup and evictCacheFor
+    // only removes vanished files — without a drop at the skip site, a
+    // parsed-then-symlinked file would keep its stale parse in memory and
+    // in diagnostics().entries until it disappeared entirely.
+    if (process.platform === 'win32') return; // symlinkSync needs privileges on stock Windows
+    const dir = makeTempDir({ 'alpha.json': good, 'beta.json': beta });
+    const secret = path.join(os.tmpdir(), `pmo-mcp-secret-${process.pid}-3.json`);
+    fs.writeFileSync(secret, '{"id":"evil","name":"Evil"}');
+    try {
+      withDir(dir, () => {
+        refresh();
+        listProjects();
+        assert.equal(diagnostics().entries, 2);
+        fs.rmSync(path.join(dir, 'beta.json'));
+        fs.symlinkSync(secret, path.join(dir, 'beta.json'));
+        const d0 = diagnostics();
+        const { projects, warnings } = listProjects();
+        const d1 = diagnostics();
+        assert.equal(projects.length, 1, 'symlinked beta is not listed');
+        assert.equal(warnings.length, 1);
+        assert.equal(d1.skips - d0.skips, 1);
+        assert.equal(d1.evictions - d0.evictions, 1, 'the stale parse is evicted at the skip site');
+        assert.equal(d1.entries, 1, 'diagnostics track only live cacheable files');
+      });
+    } finally {
+      fs.rmSync(secret, { force: true });
+    }
+  });
+
+  test('byte budget evicts oldest entries; listing stays correct', () => {
+    const dir = makeTempDir({
+      'a.json': good,
+      'b.json': beta,
+      'c.json': JSON.stringify({ id: 3, name: 'Gamma' })
+    });
+    withEnv('PMO_CACHE_MAX_BYTES', '1', () => {
+      withDir(dir, () => {
+        refresh();
+        const d0 = diagnostics();
+        const first = listProjects();
+        const d1 = diagnostics();
+        assert.equal(first.projects.length, 3, 'all projects listed regardless of cache state');
+        assert.equal(first.warnings.length, 0);
+        assert.ok(d1.evictions - d0.evictions >= 2, 'budget overflow evicted entries');
+        assert.ok(d1.entries <= 1, 'a 1-byte budget holds at most the newest entry');
+        // Next scan must re-parse the evicted files (budget still active).
+        // Per-insert enforcement means a 1-byte budget thrashes by design:
+        // each new insert evicts the previous entry, so nothing survives
+        // as a cache hit — the pins here are correctness (all projects
+        // listed) plus the eviction/re-parse behavior, never hit counts.
+        const d2 = diagnostics();
+        const second = listProjects();
+        const d3 = diagnostics();
+        assert.equal(second.projects.length, 3);
+        assert.equal(d3.misses - d2.misses, 3, 'every file re-parses under a thrashing budget');
+        assert.equal(d3.entries <= 1, true, 'cache still capped after the second scan');
+      });
+    });
+  });
+
+  test('duplicate project names resolve deterministically (first by sorted filename)', () => {
+    const dir = makeTempDir({
+      'b.json': JSON.stringify({ id: 'B', name: 'Dup' }),
+      'a.json': JSON.stringify({ id: 'A', name: 'Dup' })
+    });
+    withDir(dir, () => {
+      refresh();
+      const { projects } = listProjects();
+      assert.equal(projects.length, 2, 'both duplicates are listed');
+      const byName = getProject('dup');
+      assert.equal(byName.error, null);
+      assert.equal(byName.project.id, 'A', 'name match wins by sorted-filename order (a.json first)');
+      const byId = getProject('B');
+      assert.equal(byId.error, null);
+      assert.equal(byId.project.id, 'B', 'the second duplicate stays reachable by id');
+    });
+  });
+
+  test('deleted files are evicted from the cache and stop resolving', () => {
+    const dir = makeTempDir({ 'alpha.json': good, 'beta.json': beta });
+    const betaPath = path.join(dir, 'beta.json');
+    withDir(dir, () => {
+      refresh();
+      const first = listProjects();
+      assert.equal(first.projects.length, 2);
+      assert.equal(diagnostics().entries, 2);
+      fs.rmSync(betaPath);
+      const d0 = diagnostics();
+      const second = listProjects();
+      const d1 = diagnostics();
+      assert.equal(second.projects.length, 1);
+      assert.equal(second.projects[0].id, '1');
+      assert.equal(second.warnings.length, 0);
+      assert.equal(d1.evictions - d0.evictions, 1, 'the vanished file is evicted');
+      assert.equal(d1.entries, 1, 'no stale cache entry remains');
+      const gone = getProject('2');
+      assert.equal(gone.project, null);
+      assert.match(gone.error, /no project matching '2'/);
+      assert.match(gone.error, /Available: 1/, 'survivor is still listed as available');
+    });
+  });
+});
+
+describe('portfolio scale (1000 files)', () => {
+  test('1000-file portfolio: one parse per file, then pure cache hits', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pmo-mcp-scale-'));
+    try {
+      for (let i = 0; i < 1000; i++) {
+        fs.writeFileSync(
+          path.join(dir, `p-${String(i).padStart(4, '0')}.json`),
+          JSON.stringify({
+            id: `p-${i}`,
+            name: `Project ${i}`,
+            status: 'active',
+            activities: [{ id: 'a1', duration: 5, predecessors: [] }]
+          })
+        );
+      }
+      withDir(dir, () => {
+        refresh();
+        const d0 = diagnostics();
+        const first = listProjects();
+        const d1 = diagnostics();
+        assert.equal(first.projects.length, 1000);
+        assert.equal(first.warnings.length, 0);
+        assert.equal(d1.misses - d0.misses, 1000, 'first scan parses each file exactly once');
+        const second = listProjects();
+        const d2 = diagnostics();
+        assert.equal(second.projects.length, 1000);
+        assert.equal(d2.hits - d1.hits, 1000, 'second scan: zero re-reads, pure cache hits');
+        assert.equal(d2.misses - d1.misses, 0, 'acceptance: repeated calls do not re-read unchanged files');
+        const picked = getProject('p-943');
+        assert.equal(picked.error, null);
+        assert.equal(picked.project.id, 'p-943');
+        const d2b = diagnostics(); // snapshot AFTER the getProject hit
+        fs.writeFileSync(
+          path.join(dir, 'p-0500.json'),
+          JSON.stringify({ id: 'p-500', name: 'Project 500', status: 'edited', activities: [] })
+        );
+        const third = listProjects();
+        const d3 = diagnostics();
+        assert.equal(d3.misses - d2b.misses, 1, 'exactly the changed file is re-read at scale');
+        assert.equal(d3.hits - d2b.hits, 999, 'the other 999 stay cache hits');
+        assert.equal(third.projects.find((p) => p.id === 'p-500').status, 'edited');
       });
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
