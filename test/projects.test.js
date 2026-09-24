@@ -164,7 +164,10 @@ describe('getProject', () => {
       'obj-name.json': JSON.stringify({ id: 'o', name: { nested: true } })
     });
     withDir(dir, () => {
-      // '' and 0 fall back to the id (unchanged || semantics)
+      // What this pins: falsy names crash nothing and create no false
+      // matches. (The || fallback itself is not distinguishable here —
+      // for these fixtures the id match and the name fallback resolve to
+      // the same string by definition; the semantics live in lib.)
       assert.equal(getProject('e').project.id, 'e');
       assert.equal(getProject('z').project.id, 'z');
       // an object name stringifies without throwing
