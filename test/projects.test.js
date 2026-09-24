@@ -205,6 +205,36 @@ describe('getProject', () => {
     });
   });
 
+  // CR + cubic round 2 on #13: the [unprintable] placeholder leaked into
+  // the MATCH namespace — getProject('[unprintable]') would hand over the
+  // first project whose conversion failed, and an agent copying that id
+  // from the Available list would silently receive an arbitrary hostile
+  // project. Placeholders are display-only; matching skips them. A project
+  // whose REAL id is literally '[unprintable]' still matches (it is just
+  // an id).
+  test('the [unprintable] placeholder is display-only, never a match target', () => {
+    const dir = makeTempDir({
+      'hostile-id.json': JSON.stringify({ id: { toString: null }, name: 'Hostile' }),
+      'literal.json': JSON.stringify({ id: '[unprintable]', name: 'Literal' }),
+      'b.json': good
+    });
+    withDir(dir, () => {
+      const { projects } = listProjects();
+      assert.equal(projects.length, 3);
+      // the placeholder lookup resolves ONLY the literal-id project —
+      // never a project whose conversion failed
+      const lookup = getProject('[unprintable]');
+      assert.equal(lookup.error, null);
+      assert.equal(lookup.project.name, 'Literal');
+      assert.equal(lookup.project.id, '[unprintable]');
+      // the hostile project's real NAME is still matchable — only its
+      // unconvertible ID field is inert
+      assert.equal(getProject('hostile').project.name, 'Hostile');
+      const miss = getProject('nope');
+      assert.ok(miss.error.includes('[unprintable]'));
+    });
+  });
+
   // Regression (review batch 4): a malformed file elsewhere in the dir must
   // not block getProject for valid projects. Old code short-circuited on any
   // listProjects warning, killing every project-specific tool.
