@@ -96,6 +96,40 @@ describe('getProject', () => {
       assert.ok(error.includes('1'));
     });
   });
+
+  // Regression (review batch 4): a malformed file elsewhere in the dir must
+  // not block getProject for valid projects. Old code short-circuited on any
+  // listProjects warning, killing every project-specific tool.
+  test('malformed sibling file does not block lookups of valid projects', () => {
+    const dir = makeTempDir({
+      'alpha.json': good,
+      'corrupt.json': '{ not valid json',
+      'notes.json': 'null'
+    });
+    withDir(dir, () => {
+      // control: listProjects still reports the warnings
+      const { warnings } = listProjects();
+      assert.equal(warnings.length, 2);
+      // by id…
+      const byId = getProject('1');
+      assert.equal(byId.error, null);
+      assert.equal(byId.project.name, 'Alpha');
+      // …and by name
+      const byName = getProject('ALPHA');
+      assert.equal(byName.error, null);
+      assert.equal(byName.project.id, 1);
+    });
+  });
+
+  test('empty dir error keeps parse warnings when NO valid project exists', () => {
+    const dir = makeTempDir({ 'corrupt.json': '{ not valid json' });
+    withDir(dir, () => {
+      const { project, error } = getProject('1');
+      assert.equal(project, null);
+      assert.ok(error.startsWith('no project files in'));
+      assert.ok(error.includes('failed to parse'), 'diagnostics preserved in error');
+    });
+  });
 });
 
 test('bundled sample project loads and is structurally sound', () => {
