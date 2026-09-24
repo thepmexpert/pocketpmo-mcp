@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { listProjects, getProject } from '../lib/projects.js';
+import { listProjects, getProject, projectsDir } from '../lib/projects.js';
 
 function makeTempDir(files) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pmo-mcp-test-'));
@@ -136,7 +136,7 @@ describe('getProject', () => {
       const { project, error } = getProject('1');
       assert.equal(project, null);
       assert.ok(error.startsWith('projects dir not readable:'), `got: ${error}`);
-      assert.equal(error.split('/nonexistent').length - 1, 1, 'path appears once');
+      assert.equal(error.split(projectsDir()).length - 1, 1, 'path appears once');
     });
   });
 });
