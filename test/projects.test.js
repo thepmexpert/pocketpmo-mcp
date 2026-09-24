@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { listProjects, getProject, projectsDir } from '../lib/projects.js';
 
 function makeTempDir(files) {
@@ -201,12 +202,33 @@ describe('review batch 5 hardening', () => {
         const { projects, warnings } = listProjects();
         assert.equal(projects.length, 1, 'symlink not listed as a project');
         assert.equal(warnings.length, 1);
-        assert.match(warnings[0], /^symlink skipped:/);
+        // O_NOFOLLOW (macOS/Linux) makes open() itself fail with ELOOP; on
+        // platforms without it, the fstat gate reports the skip explicitly.
+        // Either way: the link is never followed, never read.
+        assert.match(warnings[0], /^(symlink skipped:|failed to open .*ELOOP)/, warnings[0]);
         assert.match(warnings[0], /evil\.json/);
       });
     } finally {
       fs.rmSync(secret, { force: true });
     }
+  });
+
+  test('non-regular files (FIFO) named *.json are skipped, never blocking', () => {
+    const dir = makeTempDir({ 'alpha.json': good });
+    // A FIFO named *.json is the trap: a plain open(O_RDONLY) blocks until a
+    // writer appears — the server would hang forever. The O_NONBLOCK +
+    // fstat-isFile gate must classify and skip it instantly.
+    if (process.platform === 'win32') return; // no FIFOs on Windows
+    const fifoPath = path.join(dir, 'pipe.json');
+    const r = spawnSync('mkfifo', [fifoPath]);
+    if (r.status !== 0) return; // platform without mkfifo — skip quietly
+    withDir(dir, () => {
+      const { projects, warnings } = listProjects();
+      assert.equal(projects.length, 1, 'fifo not listed as a project');
+      assert.equal(warnings.length, 1);
+      assert.match(warnings[0], /^not a regular file, skipped:/, warnings[0]);
+      assert.match(warnings[0], /pipe\.json/);
+    });
   });
 
   test('parse cache: repeated getProject reuses parsed entry; edits are picked up', () => {

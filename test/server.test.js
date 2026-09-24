@@ -196,31 +196,23 @@ describe('review batch 5 hardening', () => {
     assert.equal(r.result.isError, false);
   });
 
-  test('backpressure: responses stay ordered when stdout applies pressure', async () => {
-    // Fake stdout: the FIRST write reports a full buffer (returns false) and
-    // resolves on 'drain'; later writes succeed immediately. All three pings
-    // are queued before the first drain fires — a naive async writeLine
-    // would let response 2 overtake response 1.
+  test('backpressure: writes wait for drain, responses stay ordered', async () => {
+    // Fake stdout: the FIRST write reports a full buffer (returns false);
+    // the drain event is HELD until the test releases it. This makes the
+    // test capable of failing the old fire-and-forget implementation: with
+    // no drain wait, writes 2 and 3 appear immediately and in-flight
+    // response 1 can be overtaken. A correct implementation writes only
+    // response 1, waits, then finishes 2 and 3 in order after release.
     const written = [];
-    let drainCallback = null;
-    let firstWriteDone = false;
+    let releaseDrain = null;
     const fakeStdout = {
       write(chunk) {
         written.push(chunk);
-        if (!firstWriteDone) {
-          firstWriteDone = true;
-          setImmediate(() => {
-            const cb = drainCallback;
-            drainCallback = null;
-            if (cb) cb();
-          });
-          return false;
-        }
-        return true;
+        return written.length !== 1; // first write: full buffer
       },
       once(event, cb) {
         assert.equal(event, 'drain');
-        drainCallback = cb;
+        releaseDrain = cb;
       }
     };
     const { serve } = await import('../server.js');
@@ -232,9 +224,13 @@ describe('review batch 5 hardening', () => {
     stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'ping' }) + '\n');
     stdin.end();
     await new Promise((resolve) => stdin.on('end', resolve));
-    // Allow the drain continuation and chained writes to flush
     for (let i = 0; i < 5; i++) await new Promise((resolve) => setImmediate(resolve));
-    assert.equal(written.length, 3, 'all three responses written');
+    // Backpressure active: only the first response may be written so far.
+    assert.equal(written.length, 1, 'writes 2+3 must wait for drain while buffer is full');
+    assert.equal(JSON.parse(written[0]).id, 1);
+    releaseDrain(); // buffer drained — remaining responses flush in order
+    for (let i = 0; i < 5; i++) await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(written.length, 3, 'all three responses written after drain');
     const ids = written.map((c) => JSON.parse(c).id);
     assert.deepEqual(ids, [1, 2, 3], 'responses must arrive in request order');
   });

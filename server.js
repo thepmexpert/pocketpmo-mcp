@@ -130,8 +130,10 @@ function loadOrFail(idOrName) {
 
 const HANDLERS = {
   list_projects() {
-    const { dir, projects, warnings } = listProjects();
-    return { dir: dir ?? null, projects, warnings, read_only: true };
+    const { projects, warnings } = listProjects();
+    // `dir` stays server-side: it is the operator's configured location and
+    // must not leak into MCP client responses (same rationale as #3).
+    return { projects, warnings, read_only: true };
   },
 
   get_project(args) {
