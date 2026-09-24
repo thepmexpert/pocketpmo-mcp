@@ -151,3 +151,85 @@ test('bundled sample project loads and is structurally sound', () => {
   assert.equal(sample.risks.length, 4);
   assert.equal(sample.evmData.milestones.length, 4);
 });
+
+// ---------------------------------------------------------------------------
+// Review batch 5: hardening (path leakage, size cap, symlink skip, cache)
+// ---------------------------------------------------------------------------
+
+describe('review batch 5 hardening', () => {
+  test('listProjects exposes file basename, never the absolute path', () => {
+    const dir = makeTempDir({ 'alpha.json': good });
+    withDir(dir, () => {
+      const { projects } = listProjects();
+      assert.equal(projects.length, 1);
+      const meta = projects[0];
+      assert.equal(meta.file, 'alpha.json');
+      assert.ok(!('path' in meta), 'path field must not be exposed');
+      const serialized = JSON.stringify(meta);
+      assert.ok(!serialized.includes(dir), 'serialized metadata must not contain the dir');
+      // getProject still resolves through the basename internally
+      const { project, error } = getProject('alpha');
+      assert.equal(error, null);
+      assert.equal(project.id, 1);
+    });
+  });
+
+  test('oversized files are skipped with a warning, never read', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pmo-mcp-big-'));
+    // Build a >10MB file without reading it back (block-write via createWriteStream
+    // is async; use a sparse-ish repeated string just over the cap)
+    const big = '{"id":"big","name":"Big","pad":"' + 'x'.repeat(10 * 1024 * 1024) + '"}';
+    fs.writeFileSync(path.join(dir, 'big.json'), big);
+    fs.writeFileSync(path.join(dir, 'small.json'), good);
+    withDir(dir, () => {
+      const { projects, warnings } = listProjects();
+      assert.equal(projects.length, 1, 'only the small project is listed');
+      assert.equal(projects[0].id, '1');
+      assert.equal(warnings.length, 1);
+      assert.match(warnings[0], /^file too large \(\d+ bytes/);
+      assert.match(warnings[0], /big\.json/);
+    });
+  });
+
+  test('symlinked .json files are skipped with a warning, not followed', () => {
+    const dir = makeTempDir({ 'alpha.json': good });
+    const secret = path.join(os.tmpdir(), `pmo-mcp-secret-${process.pid}.json`);
+    fs.writeFileSync(secret, JSON.stringify({ id: 'evil', name: 'Evil', root: 'hash' }));
+    fs.symlinkSync(secret, path.join(dir, 'evil.json'));
+    try {
+      withDir(dir, () => {
+        const { projects, warnings } = listProjects();
+        assert.equal(projects.length, 1, 'symlink not listed as a project');
+        assert.equal(warnings.length, 1);
+        assert.match(warnings[0], /^symlink skipped:/);
+        assert.match(warnings[0], /evil\.json/);
+      });
+    } finally {
+      fs.rmSync(secret, { force: true });
+    }
+  });
+
+  test('parse cache: repeated getProject reuses parsed entry; edits are picked up', () => {
+    const dir = makeTempDir({ 'alpha.json': good });
+    const filePath = path.join(dir, 'alpha.json');
+    withDir(dir, () => {
+      const first = getProject('alpha');
+      assert.equal(first.error, null);
+      // Same mtime+size => cache hit (observable: identity of the parsed object)
+      const second = getProject('alpha');
+      assert.equal(second.project, first.project, 'cache hit returns the same parsed object');
+      // Edit the file (content changes; force a distinct mtime) => re-read
+      const edited = JSON.parse(good);
+      edited.status = 'updated';
+      fs.writeFileSync(filePath, JSON.stringify(edited));
+      const { atime, mtime } = fs.statSync(filePath);
+      const future = new Date(mtime.getTime() + 5000);
+      fs.utimesSync(filePath, atime, future);
+      const third = getProject('alpha');
+      assert.equal(third.error, null);
+      assert.notEqual(third.project, first.project, 'edited file must not come from cache');
+      assert.equal(third.project.status, 'updated');
+    });
+  });
+});
+

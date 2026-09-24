@@ -161,3 +161,81 @@ describe('tool calls against bundled sample project', () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// Review batch 5: seed-0 passthrough, schema-contract gate, backpressure
+// ---------------------------------------------------------------------------
+
+describe('review batch 5 hardening', () => {
+  test('seed 0 is honored, not silently replaced by 42', () => {
+    // OLD: Number(0) || 42 -> seed 42. NEW: seed 0 flows through to makeRng
+    // (which maps LCG-zero state to 1). seed 0 must now be reproducible and
+    // distinct from the seed-42 sequence.
+    const base = { project: '101', iterations: 200 };
+    const r0a = handleRequest(req(60, 'tools/call', { name: 'monte_carlo', arguments: { ...base, seed: 0 } }));
+    const r0b = handleRequest(req(61, 'tools/call', { name: 'monte_carlo', arguments: { ...base, seed: 0 } }));
+    const r42 = handleRequest(req(62, 'tools/call', { name: 'monte_carlo', arguments: { ...base, seed: 42 } }));
+    assert.equal(r0a.result.content[0].text, r0b.result.content[0].text, 'seed 0 is reproducible');
+    assert.notEqual(
+      r0a.result.content[0].text,
+      r42.result.content[0].text,
+      'seed 0 must not produce the seed-42 sequence'
+    );
+  });
+
+  test('missing required parameters are rejected with a schema-level error', () => {
+    for (const name of ['get_project', 'pert_estimate', 'critical_path', 'monte_carlo', 'evm_metrics', 'risk_register']) {
+      const r = handleRequest(req(63, 'tools/call', { name, arguments: {} }));
+      assert.equal(r.result.isError, true, `${name} requires 'project'`);
+      assert.match(r.result.content[0].text, /^missing required parameter\(s\): project$/);
+    }
+  });
+
+  test('tools without required params still dispatch (list_projects)', () => {
+    const r = handleRequest(req(64, 'tools/call', { name: 'list_projects', arguments: {} }));
+    assert.equal(r.result.isError, false);
+  });
+
+  test('backpressure: responses stay ordered when stdout applies pressure', async () => {
+    // Fake stdout: the FIRST write reports a full buffer (returns false) and
+    // resolves on 'drain'; later writes succeed immediately. All three pings
+    // are queued before the first drain fires — a naive async writeLine
+    // would let response 2 overtake response 1.
+    const written = [];
+    let drainCallback = null;
+    let firstWriteDone = false;
+    const fakeStdout = {
+      write(chunk) {
+        written.push(chunk);
+        if (!firstWriteDone) {
+          firstWriteDone = true;
+          setImmediate(() => {
+            const cb = drainCallback;
+            drainCallback = null;
+            if (cb) cb();
+          });
+          return false;
+        }
+        return true;
+      },
+      once(event, cb) {
+        assert.equal(event, 'drain');
+        drainCallback = cb;
+      }
+    };
+    const { serve } = await import('../server.js');
+    const { PassThrough } = await import('node:stream');
+    const stdin = new PassThrough();
+    serve({ stdin, stdout: fakeStdout });
+    stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' }) + '\n');
+    stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'ping' }) + '\n');
+    stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'ping' }) + '\n');
+    stdin.end();
+    await new Promise((resolve) => stdin.on('end', resolve));
+    // Allow the drain continuation and chained writes to flush
+    for (let i = 0; i < 5; i++) await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(written.length, 3, 'all three responses written');
+    const ids = written.map((c) => JSON.parse(c).id);
+    assert.deepEqual(ids, [1, 2, 3], 'responses must arrive in request order');
+  });
+});

@@ -26,7 +26,10 @@ import { listProjects, getProject, projectsDir } from './lib/projects.js';
 
 const SERVER_INFO = { name: 'pocketpmo-mcp', version: '0.1.0' };
 const PROTOCOL_VERSION = '2025-06-18';
-const MAX_ITERATIONS = 20000;
+// Tighter than the lib-level hard ceiling in lib/calculators.js (1,000,000):
+// the server clamps agent-supplied iteration counts here BEFORE the lib sees
+// them (garbage gets the default workload, not the maximum).
+export const MAX_ITERATIONS = 20000;
 
 // ---------------------------------------------------------------------------
 // Tool surface
@@ -247,10 +250,18 @@ const HANDLERS = {
     const requested = Number(args.iterations);
     const floored = Number.isFinite(requested) ? Math.floor(requested) : 2000;
     const iterations = Math.min(Math.max(floored, 1), MAX_ITERATIONS);
+    // ?? not ||: seed 0 is a legitimate seed — `Number(0) || 42` silently
+    // replaced it with 42. makeRng itself guards the LCG-zero edge
+    // (state 0 produces an all-zero sequence, so 0 maps to state 1 there).
+    const seedArg = args.seed === undefined || args.seed === null ? undefined : Number(args.seed);
+    const seed =
+      seedArg !== undefined && Number.isFinite(seedArg)
+        ? seedArg
+        : 42;
     const result = runMonteCarlo({
       activities: structuredClone(acts),
       iterations,
-      rng: makeRng(Number(args.seed) || 42),
+      rng: makeRng(seed),
       targets: Array.isArray(args.targets) ? args.targets : []
     });
     return { project: p.name, ...result, read_only: true };
@@ -336,9 +347,26 @@ export function handleRequest(request, handlers = HANDLERS) {
     if (typeof params.name !== 'string' || !Object.hasOwn(handlers, params.name)) {
       return { jsonrpc: '2.0', id, result: errorResult(`unknown tool: ${params.name}`) };
     }
+    // Enforce the declared inputSchema contract (required params only —
+    // the handlers own type coercion and clamping). MCP clients rely on
+    // the schema for validation; without this gate the contract is
+    // one-sided and a missing required param fails deep inside a handler
+    // with a less helpful error.
+    const tool = TOOLS.find((t) => t.name === params.name);
+    const args = params.arguments ?? {};
+    const missing = ((tool && tool.inputSchema.required) || []).filter(
+      (k) => args[k] === undefined
+    );
+    if (missing.length) {
+      return {
+        jsonrpc: '2.0',
+        id,
+        result: errorResult(`missing required parameter(s): ${missing.join(', ')}`)
+      };
+    }
     const handler = handlers[params.name];
     try {
-      return { jsonrpc: '2.0', id, result: textResult(handler(params.arguments ?? {})) };
+      return { jsonrpc: '2.0', id, result: textResult(handler(args)) };
     } catch (error) {
       return { jsonrpc: '2.0', id, result: errorResult(error.message) };
     }
@@ -348,6 +376,12 @@ export function handleRequest(request, handlers = HANDLERS) {
 
 export function serve({ stdin = process.stdin, stdout = process.stdout } = {}) {
   const rl = createInterface({ input: stdin, terminal: false });
+  // Backpressure (review batch 5): when stdout's kernel buffer is full,
+  // write() returns false and the response must wait for 'drain' — or
+  // responses queue in memory unbounded. Writes are chained so responses
+  // stay IN ORDER: awaiting inline in the line handler would let the next
+  // line's response overtake a drained-but-delayed earlier one.
+  let tail = Promise.resolve();
   rl.on('line', (line) => {
     const trimmed = line.trim();
     if (!trimmed) return;
@@ -355,17 +389,20 @@ export function serve({ stdin = process.stdin, stdout = process.stdout } = {}) {
     try {
       request = JSON.parse(trimmed);
     } catch (error) {
-      writeLine(stdout, { jsonrpc: '2.0', id: null, error: { code: -32700, message: `parse error: ${error.message}` } });
+      tail = tail.then(() =>
+        writeLine(stdout, { jsonrpc: '2.0', id: null, error: { code: -32700, message: `parse error: ${error.message}` } })
+      );
       return;
     }
     const response = handleRequest(request);
-    if (response !== null) writeLine(stdout, response);
+    if (response !== null) tail = tail.then(() => writeLine(stdout, response));
   });
   return rl;
 }
 
 function writeLine(stdout, obj) {
-  stdout.write(JSON.stringify(obj) + '\n');
+  const ok = stdout.write(JSON.stringify(obj) + '\n');
+  if (!ok) return new Promise((resolve) => stdout.once('drain', resolve));
 }
 
 const isDirectRun =
