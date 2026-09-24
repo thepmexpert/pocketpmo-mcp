@@ -280,6 +280,41 @@ describe('getProject', () => {
     });
   });
 
+  // Regression (finding #3 residual, no-match diagnostics): when the REQUESTED
+  // project's own file is the malformed one, the no-match error must say so —
+  // a bare "no project matching" hides the fact that a file failed to load
+  // (e.g. a partial/temp file in a shared export dir). Warnings collected by
+  // the scan are basename-sanitized already; they must never leak the dir.
+  test('no-match error surfaces unreadable-file context when the requested file is malformed', () => {
+    const dir = makeTempDir({
+      'alpha.json': '{ torn',
+      'beta.json': JSON.stringify({ id: 2, name: 'Beta', activities: [] })
+    });
+    withDir(dir, () => {
+      const result = getProject('alpha');
+      assert.equal(result.project, null);
+      assert.ok(result.error.includes("no project matching 'alpha'"));
+      assert.ok(result.error.includes('Available: 2'), 'available ids still listed');
+      assert.ok(
+        result.error.includes('failed to parse alpha.json'),
+        `unreadable context missing from: ${result.error}`
+      );
+      // Whole-payload leak rule (batch 5): the dir string appears nowhere.
+      assert.ok(!JSON.stringify(result).includes(dir), 'dir leaked into result');
+    });
+  });
+
+  test('clean no-match error is unchanged when nothing is unreadable', () => {
+    const dir = makeTempDir({
+      'beta.json': JSON.stringify({ id: 2, name: 'Beta', activities: [] })
+    });
+    withDir(dir, () => {
+      const { project, error } = getProject('ghost');
+      assert.equal(project, null);
+      assert.equal(error, "no project matching 'ghost'. Available: 2");
+    });
+  });
+
   test('all-invalid-files error keeps parse warnings when NO valid project exists', () => {
     const dir = makeTempDir({ 'corrupt.json': '{ not valid json' });
     withDir(dir, () => {

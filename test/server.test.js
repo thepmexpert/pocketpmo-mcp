@@ -132,6 +132,33 @@ describe('tool calls against bundled sample project', () => {
     assert.ok(r.result.content[0].text.includes('no project matching'));
   });
 
+  // Finding #3 residual, server entry path: a requested project whose own
+  // file is malformed must surface the parse failure in-band (the agent
+  // sees WHY the project is gone, not just "no matching").
+  test('malformed requested file -> in-band error names the unreadable file', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pmo-mcp-corrupt-'));
+    fs.writeFileSync(path.join(dir, 'alpha.json'), '{ torn');
+    fs.writeFileSync(
+      path.join(dir, 'beta.json'),
+      JSON.stringify({ id: 2, name: 'Beta', activities: [] })
+    );
+    const prev = process.env.PMO_PROJECTS_DIR;
+    process.env.PMO_PROJECTS_DIR = dir;
+    try {
+      const r = handleRequest(req(16, 'tools/call', { name: 'get_project', arguments: { project: 'alpha' } }));
+      assert.equal(r.result.isError, true);
+      const text = r.result.content[0].text;
+      assert.ok(text.includes("no project matching 'alpha'"));
+      assert.ok(text.includes('unreadable files skipped'));
+      assert.ok(text.includes('failed to parse alpha.json'));
+      assert.ok(!text.includes(dir), 'dir must not leak into the error');
+    } finally {
+      if (prev === undefined) delete process.env.PMO_PROJECTS_DIR;
+      else process.env.PMO_PROJECTS_DIR = prev;
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test('critical_path surfaces duplicate-id issues from the project file', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pmo-mcp-dup-'));
     const dupProject = JSON.stringify({
