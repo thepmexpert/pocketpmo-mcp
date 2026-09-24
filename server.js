@@ -396,31 +396,36 @@ export function serve({ stdin = process.stdin, stdout = process.stdout } = {}) {
       try {
         stdout.write(JSON.stringify(payload) + '\n', () => {
           pending--;
+          if (pending < MAX_PENDING) rl.resume(); // unblock paused input
           resolve();
         });
       } catch {
         pending--; // synchronous write error: fail-soft, keep serving
+        if (pending < MAX_PENDING) rl.resume();
         resolve();
       }
     });
-  // Admission control: past MAX_PENDING the request is REFUSED, not
-  // retained — a hostile pipeliner (already violating the sequential
-  // -request convention MCP hosts follow) cannot grow server memory past
-  // the cap. The overload error is written inline; the stream's internal
-  // FIFO keeps it ordered behind previously issued writes. It is neither
-  // chained nor counted in `pending`.
+  // A failed async write fires the completion callback AND emits 'error' on
+  // the stream (verified: a Writable whose _write fails asynchronously does
+  // both). Without a listener, an async EPIPE (client closed the pipe) is
+  // an uncaught 'error' event that kills the process. The chain already
+  // settles per-link via callbacks — consuming the event here is what keeps
+  // the process alive to reach its clean exit.
+  stdout.on('error', () => {});
+  // Admission control: past MAX_PENDING, PAUSE reading stdin. Backpressure
+  // then propagates at the kernel level — the client's pipe buffer fills
+  // and ITS writes block — so server memory stays bounded no matter how
+  // fast the client pipelines. Requests past the cap are dropped without a
+  // response: a pipeliner has already violated the sequential-request
+  // convention MCP hosts follow, and a sequential client never reaches
+  // this path. Writing a special "overloaded" error inline instead would
+  // jump the queue — chained responses are issued from microtasks, so an
+  // inline stdout.write overtakes responses to requests the server
+  // received EARLIER (cubic round 2 verified this against the real
+  // serve()). Reading resumes when the backlog drains below the cap.
   const respond = (id, payload) => {
     if (pending >= MAX_PENDING) {
-      try {
-        stdout.write(
-          JSON.stringify({
-            jsonrpc: '2.0',
-            id: id ?? null,
-            error: { code: -32000, message: `server overloaded: ${MAX_PENDING} responses queued, request dropped` }
-          }) + '\n',
-          () => {}
-        );
-      } catch {} // stream gone: nothing to deliver
+      rl.pause();
       return;
     }
     pending++;

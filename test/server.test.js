@@ -210,7 +210,8 @@ describe('review batch 5 hardening', () => {
         written.push(chunk);
         heldCallbacks.push(cb);
         return false; // buffer always full
-      }
+      },
+      on() {} // server registers an stdout 'error' consumer
     };
     const { serve } = await import('../server.js');
     const { PassThrough } = await import('node:stream');
@@ -228,25 +229,34 @@ describe('review batch 5 hardening', () => {
     assert.equal(written.length, 1, 'responses 2+3 must wait for response 1 to flush');
     assert.equal(JSON.parse(written[0]).id, 1);
     assert.equal(drained, 0, 'drained must not fire while a write is unflushed');
-    heldCallbacks.shift()(); // response 1 flushed → response 2 issued
+    const releaseOne = () => {
+      // Remove-before-invoke: a callback that stays in the array would be
+      // released twice, double-decrementing pending (cubic round 2).
+      const cb = heldCallbacks.shift();
+      if (cb) cb();
+    };
+    releaseOne(); // response 1 flushed → response 2 issued
     for (let i = 0; i < 5; i++) await new Promise((resolve) => setImmediate(resolve));
     assert.equal(written.length, 2, 'response 2 issued after response 1 flushed');
     assert.equal(drained, 0);
-    heldCallbacks.forEach((cb) => cb()); // response 2 flushed → response 3 issued
+    releaseOne(); // response 2 flushed → response 3 issued
     for (let i = 0; i < 5; i++) await new Promise((resolve) => setImmediate(resolve));
     assert.equal(written.length, 3, 'all three responses written');
     assert.deepEqual(written.map((c) => JSON.parse(c).id), [1, 2, 3], 'responses must arrive in request order');
     assert.equal(drained, 0, 'still awaiting the final flush');
-    heldCallbacks.forEach((cb) => cb()); // final flush
+    releaseOne(); // final flush
     for (let i = 0; i < 5; i++) await new Promise((resolve) => setImmediate(resolve));
     assert.equal(drained, 1, 'drained fires only after every write completes');
   });
 
-  test('overload cap: past MAX_PENDING requests are refused inline, never queued', async () => {
-    // A blocked pipe (callbacks held) with MAX_PENDING+50 pipelined pings.
-    // Fails the previous implementation by construction: it reassigned a
-    // `const` binding on the overload path and CRASHED the server the first
-    // time the cap was reached; it also kept enqueueing excess responses.
+  test('overload cap: stdin pauses at MAX_PENDING, backlog stays bounded', async () => {
+    // cubic round 2 verified the previous inline-overload design REORDERED
+    // output: chained responses are issued from microtasks, so an inline
+    // "overloaded" write overtakes responses to earlier requests. This
+    // design pauses stdin instead — no special responses, no ordering
+    // hazard, kernel-level backpressure bounds memory. Requests past the
+    // cap get no response at all (a pipeliner has already violated
+    // sequential-request semantics).
     const written = [];
     let heldCallbacks = [];
     const fakeStdout = {
@@ -254,34 +264,33 @@ describe('review batch 5 hardening', () => {
         written.push(chunk);
         heldCallbacks.push(cb);
         return false;
-      }
+      },
+      on() {}
     };
     const { serve } = await import('../server.js');
     const { PassThrough } = await import('node:stream');
     const stdin = new PassThrough();
     const rl = serve({ stdin, stdout: fakeStdout });
-    const N = 1050;
     const lines = [];
-    for (let i = 1; i <= N; i++) lines.push(JSON.stringify({ jsonrpc: '2.0', id: i, method: 'ping' }));
+    for (let i = 1; i <= 1050; i++) lines.push(JSON.stringify({ jsonrpc: '2.0', id: i, method: 'ping' }));
     stdin.write(lines.join('\n') + '\n');
     stdin.end();
     await new Promise((resolve) => rl.on('close', resolve));
-    for (let i = 0; i < 5; i++) await new Promise((resolve) => setImmediate(resolve));
-    const isOverload = (c) => {
+    for (let i = 0; i < 10; i++) await new Promise((resolve) => setImmediate(resolve));
+    const overloadCount = written.filter((c) => {
       try { return JSON.parse(c).error?.code === -32000; } catch { return false; }
-    };
-    const overloadCount = written.filter(isOverload).length;
-    assert.equal(overloadCount, N - 1000, 'each refused request gets exactly one inline overload error');
-    assert.equal(written.length, 1 + overloadCount, 'no queued response beyond the chain head while callbacks are blocked');
-    // Unblock to fixpoint: each released callback lets the next chained
-    // link issue its write, which adds ANOTHER held callback.
+    }).length;
+    assert.equal(overloadCount, 0, 'no special overload responses exist to reorder the stream');
+    assert.equal(written.length, 1, 'while callbacks are blocked only the chain head is written — memory stays bounded');
+    // Unblock to fixpoint: each released callback issues the next link.
     while (heldCallbacks.length) {
       heldCallbacks.splice(0).forEach((cb) => cb());
       for (let i = 0; i < 3; i++) await new Promise((resolve) => setImmediate(resolve));
     }
-    assert.equal(written.length, N, 'every request answered: 1000 queued + 50 inline overload');
-    const realIds = written.filter((c) => !isOverload(c)).map((c) => JSON.parse(c).id);
-    assert.deepEqual(realIds, Array.from({ length: 1000 }, (_, i) => i + 1), 'queued responses complete in order');
+    assert.ok(written.length >= 1000 && written.length <= 1050, `every request under the cap answered, excess dropped (got ${written.length})`);
+    const ids = written.map((c) => JSON.parse(c).id);
+    const ascending = ids.every((id, i) => i === 0 || ids[i - 1] < id);
+    assert.ok(ascending, 'responses stay strictly in request order');
   });
 
   test('parse errors count against the cap', async () => {
@@ -296,7 +305,8 @@ describe('review batch 5 hardening', () => {
         written.push(chunk);
         heldCallbacks.push(cb);
         return false;
-      }
+      },
+      on() {}
     };
     const { serve } = await import('../server.js');
     const { PassThrough } = await import('node:stream');
@@ -309,24 +319,42 @@ describe('review batch 5 hardening', () => {
     stdin.end();
     await new Promise((resolve) => rl.on('close', resolve));
     for (let i = 0; i < 5; i++) await new Promise((resolve) => setImmediate(resolve));
+    // Unblock to fixpoint, then count: the honest counter admits exactly
+    // 1000 (1 valid + 999 parse-error responses); the request past the cap
+    // is DROPPED — no response at all, no special error. The deflating old
+    // implementation would have admitted it as response 1001.
+    while (heldCallbacks.length) {
+      heldCallbacks.splice(0).forEach((cb) => cb());
+      for (let i = 0; i < 3; i++) await new Promise((resolve) => setImmediate(resolve));
+    }
     const overloadCount = written.filter((c) => {
       try { return JSON.parse(c).error?.code === -32000; } catch { return false; }
     }).length;
-    assert.equal(overloadCount, 1, 'the request past the cap is refused: parse errors held the counter honest');
-    heldCallbacks.forEach((cb) => cb());
+    assert.equal(overloadCount, 0, 'no special overload responses');
+    assert.equal(written.length, 1000, 'the request past the cap got no response: parse errors held the counter honest');
   });
 
   test('write errors are consumed per-link and the chain continues', async () => {
     // Every write "fails" (callback receives EPIPE) yet returns true — the
     // old implementation attached no error handling to ok=true writes; the
     // new contract delivers the error TO the callback and keeps serving.
+    // Real streams ALSO emit 'error' on the stream object after failing a
+    // callback (verified with a failing _write) — the fake reproduces that
+    // so the server's 'error' consumer is what stands between an async
+    // EPIPE and an uncaught-event process crash.
     const written = [];
+    let errorListener = null;
     const fakeStdout = {
       write(chunk, cb) {
         written.push(chunk);
-        setTimeout(() => cb(new Error('EPIPE: client closed')), 1);
+        setTimeout(() => {
+          const err = new Error('EPIPE: client closed');
+          cb(err);
+          if (errorListener) errorListener(err); // the stream's 'error' emission
+        }, 1);
         return true;
-      }
+      },
+      on(event, cb) { if (event === 'error') errorListener = cb; }
     };
     const { serve } = await import('../server.js');
     const { PassThrough } = await import('node:stream');
