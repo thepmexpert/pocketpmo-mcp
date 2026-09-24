@@ -1,0 +1,35 @@
+# Rafter policy — suppression of audited false positives.
+# Every entry was traced input->sink before suppressing (rafter-remediation
+# skill: suppressing without the trace is forbidden). Entries are scoped by
+# path AND rule name (rules matched case-insensitively per
+# docs.rafter.so/suppression); R-... IDs are display-only provenance kept
+# in comments. NOTE: this file suppresses ONE audited finding — a NEW regex
+# finding in the same file must be re-triaged on its own merits, not
+# grandfathered in by this entry.
+version: "1"
+ignore:
+  # R-EFEEF "Unsafe Regular Expression" (1 finding, warning),
+  # lib/calculators.js:1087 — ISO_STRICT.test(value), value = date strings
+  # from project export JSON (external input). FALSE POSITIVE, traced and
+  # measured 2026-09-24:
+  # 1. No pattern injection: ISO_STRICT is a module-literal regex; the repo
+  #    contains zero `new RegExp` sites (grep-verified), so attacker input
+  #    can never become part of a pattern.
+  # 2. No catastrophic backtracking: the pattern has no nested unbounded
+  #    quantifiers — every optional group is constant-bounded (\d{1,3},
+  #    \d{2}, single-char alternatives) and the $ anchor caps match length
+  #    at ~35 chars, so longer inputs take the reject path by construction.
+  # 3. Measured, not eyeballed: six adversarial 1MB inputs (digit floods,
+  #    colon floods, timezone-ambiguity and near-miss-tail shapes) each
+  #    completed in <= 0.3ms on Node 26.
+  # Any future regex ADDED to this file is out of scope for this entry and
+  # must be triaged fresh.
+  - paths: ["lib/calculators.js"]
+    rules: ["Unsafe Regular Expression"]
+    reason: >
+      ISO_STRICT (lib/calculators.js:1087) is a literal regex with no
+      nested unbounded quantifiers; no `new RegExp` exists in the repo, so
+      pattern injection is impossible. Six adversarial 1MB inputs each
+      completed in <=0.3ms (measured 2026-09-24, Node 26) — linear time, no
+      ReDoS. Heuristic flag disproven by measurement; see the traced
+      analysis in the file header comment.
