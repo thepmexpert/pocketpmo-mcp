@@ -436,7 +436,9 @@ describe('review batch 5 hardening', () => {
     serve({ stdin: epipeStdin, stdout: epipeStdout });
     const consoleError2 = t.mock.method(console, 'error', () => {});
     epipeStdin.write(JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'ping' }) + '\n');
-    for (let i = 0; i < 20 && epipeCounters.emits < 1; i++) {
+    // Same 100-iteration bound as phase 1 — identical 1ms-delayed fake; a
+    // tighter budget here is a spurious-flake invitation under CI load.
+    for (let i = 0; i < 100 && epipeCounters.emits < 1; i++) {
       await new Promise((resolve) => setTimeout(resolve, 5));
     }
     assert.equal(epipeCounters.writes, 1, 'the request reached the fake stdout (non-vacuity)');
