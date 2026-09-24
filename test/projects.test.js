@@ -16,15 +16,17 @@ import {
 
 function makeTempDir(files) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pmo-mcp-test-'));
+  // Register BEFORE writing files: a throwing writeFileSync must not leak
+  // the freshly created dir (cubic round 1 on #13).
+  createdDirs.push(dir);
   for (const [name, content] of Object.entries(files)) {
     fs.writeFileSync(path.join(dir, name), content);
   }
-  createdDirs.push(dir);
   return dir;
 }
 
 // Every makeTempDir/mkdtemp dir is removed after the file's tests finish —
-// previously ~10 dirs leaked into os.tmpdir() per run (cubic round 3).
+// previously ~10 dirs leaked into os.tmpdir() per run (cubic round 3 on #12).
 const createdDirs = [];
 after(() => {
   for (const dir of createdDirs) {
@@ -127,10 +129,9 @@ describe('getProject', () => {
     });
   });
 
-  // Regression (cubic round 3, defect pre-existing since v0.1): `name` is
-  // hand-editable JSON and can be any value. A numeric name made
-  // name.toLowerCase() throw INSIDE the scan — one weird file poisoned
-  // every name lookup AND the error-listing path for the whole dir.
+  // Regression (cubic round 3 on #12, defect pre-existing since v0.1):
+  // non-string `name` crashed lookups dir-wide. Root cause + fix live in
+  // lib/projects.js (getProject name coercion) — see the pointer there.
   test('non-string name values cannot break lookups (numeric name)', () => {
     const dir = makeTempDir({
       'a.json': JSON.stringify({ id: 7, name: 404 }),
@@ -171,6 +172,36 @@ describe('getProject', () => {
       const miss = getProject('missing');
       assert.equal(miss.project, null);
       assert.ok(miss.error.includes('no project matching'));
+    });
+  });
+
+  // CodeRabbit round 1 on #13: String() itself throws on objects with no
+  // primitive conversion — {"toString":null} is valid JSON. Both fields
+  // (id AND name) are guarded via safeString; the sibling sites in
+  // listProjects metadata are covered too (rule: fix the class, not the
+  // quoted line).
+  test('unconvertible field values degrade to placeholders, never crashes', () => {
+    const dir = makeTempDir({
+      'hostile-id.json': JSON.stringify({ id: { toString: null }, name: 'Hostile' }),
+      'hostile-name.json': JSON.stringify({ id: 7, name: { toString: null } }),
+      'b.json': good
+    });
+    withDir(dir, () => {
+      // full listing survives both hostile files
+      const { projects } = listProjects();
+      assert.equal(projects.length, 3);
+      // a valid sibling is unaffected
+      assert.equal(getProject('alpha').project.id, 1);
+      // the hostile-name project still matches by id; its name simply
+      // cannot match anything
+      const byId = getProject(7);
+      assert.equal(byId.error, null);
+      assert.equal(byId.project.id, 7);
+      // and the error path iterates every candidate without throwing
+      const miss = getProject('nope');
+      assert.equal(miss.project, null);
+      assert.ok(miss.error.includes('no project matching'));
+      assert.ok(miss.error.includes('[unprintable]'), 'unconvertible ids get a stable placeholder');
     });
   });
 
