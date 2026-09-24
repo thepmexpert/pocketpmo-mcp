@@ -196,30 +196,28 @@ describe('review batch 5 hardening', () => {
     assert.equal(r.result.isError, false);
   });
 
-  test('backpressure: writes wait for drain, responses stay ordered', async () => {
-    // Fake stdout: the FIRST write reports a full buffer (returns false);
-    // the drain event is HELD until the test releases it. This makes the
-    // test capable of failing the old fire-and-forget implementation: with
-    // no drain wait, writes 2 and 3 appear immediately and in-flight
-    // response 1 can be overtaken. A correct implementation writes only
-    // response 1, waits, then finishes 2 and 3 in order after release.
+  test('backpressure: responses pace on write callbacks, stay ordered', async () => {
+    // Fake stdout: buffer FULL — every write returns false and its
+    // completion callback is HELD until the test releases it. Fails the old
+    // fire-and-forget implementation (writes 2 and 3 appear immediately,
+    // in-flight response 1 overtaken) AND any implementation that resolves
+    // a chain link on write()'s boolean return: unflushed responses must
+    // hold the chain and the drained signal.
     const written = [];
-    let releaseDrain = null;
+    let heldCallbacks = [];
     const fakeStdout = {
-      write(chunk) {
+      write(chunk, cb) {
         written.push(chunk);
-        return written.length !== 1; // first write: full buffer
-      },
-      once(event, cb) {
-        assert.ok(['drain', 'error', 'close'].includes(event), `unexpected event: ${event}`);
-        if (event === 'drain') releaseDrain = cb;
-      },
-      off() {} // no-op: tests don't fire error/close
+        heldCallbacks.push(cb);
+        return false; // buffer always full
+      }
     };
     const { serve } = await import('../server.js');
     const { PassThrough } = await import('node:stream');
     const stdin = new PassThrough();
-    serve({ stdin, stdout: fakeStdout });
+    const rl = serve({ stdin, stdout: fakeStdout });
+    let drained = 0;
+    rl.on('drained', () => { drained++; });
     stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' }) + '\n');
     stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'ping' }) + '\n');
     stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'ping' }) + '\n');
@@ -227,12 +225,125 @@ describe('review batch 5 hardening', () => {
     await new Promise((resolve) => stdin.on('end', resolve));
     for (let i = 0; i < 5; i++) await new Promise((resolve) => setImmediate(resolve));
     // Backpressure active: only the first response may be written so far.
-    assert.equal(written.length, 1, 'writes 2+3 must wait for drain while buffer is full');
+    assert.equal(written.length, 1, 'responses 2+3 must wait for response 1 to flush');
     assert.equal(JSON.parse(written[0]).id, 1);
-    releaseDrain(); // buffer drained — remaining responses flush in order
+    assert.equal(drained, 0, 'drained must not fire while a write is unflushed');
+    heldCallbacks.shift()(); // response 1 flushed → response 2 issued
     for (let i = 0; i < 5; i++) await new Promise((resolve) => setImmediate(resolve));
-    assert.equal(written.length, 3, 'all three responses written after drain');
-    const ids = written.map((c) => JSON.parse(c).id);
-    assert.deepEqual(ids, [1, 2, 3], 'responses must arrive in request order');
+    assert.equal(written.length, 2, 'response 2 issued after response 1 flushed');
+    assert.equal(drained, 0);
+    heldCallbacks.forEach((cb) => cb()); // response 2 flushed → response 3 issued
+    for (let i = 0; i < 5; i++) await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(written.length, 3, 'all three responses written');
+    assert.deepEqual(written.map((c) => JSON.parse(c).id), [1, 2, 3], 'responses must arrive in request order');
+    assert.equal(drained, 0, 'still awaiting the final flush');
+    heldCallbacks.forEach((cb) => cb()); // final flush
+    for (let i = 0; i < 5; i++) await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(drained, 1, 'drained fires only after every write completes');
+  });
+
+  test('overload cap: past MAX_PENDING requests are refused inline, never queued', async () => {
+    // A blocked pipe (callbacks held) with MAX_PENDING+50 pipelined pings.
+    // Fails the previous implementation by construction: it reassigned a
+    // `const` binding on the overload path and CRASHED the server the first
+    // time the cap was reached; it also kept enqueueing excess responses.
+    const written = [];
+    let heldCallbacks = [];
+    const fakeStdout = {
+      write(chunk, cb) {
+        written.push(chunk);
+        heldCallbacks.push(cb);
+        return false;
+      }
+    };
+    const { serve } = await import('../server.js');
+    const { PassThrough } = await import('node:stream');
+    const stdin = new PassThrough();
+    const rl = serve({ stdin, stdout: fakeStdout });
+    const N = 1050;
+    const lines = [];
+    for (let i = 1; i <= N; i++) lines.push(JSON.stringify({ jsonrpc: '2.0', id: i, method: 'ping' }));
+    stdin.write(lines.join('\n') + '\n');
+    stdin.end();
+    await new Promise((resolve) => rl.on('close', resolve));
+    for (let i = 0; i < 5; i++) await new Promise((resolve) => setImmediate(resolve));
+    const isOverload = (c) => {
+      try { return JSON.parse(c).error?.code === -32000; } catch { return false; }
+    };
+    const overloadCount = written.filter(isOverload).length;
+    assert.equal(overloadCount, N - 1000, 'each refused request gets exactly one inline overload error');
+    assert.equal(written.length, 1 + overloadCount, 'no queued response beyond the chain head while callbacks are blocked');
+    // Unblock to fixpoint: each released callback lets the next chained
+    // link issue its write, which adds ANOTHER held callback.
+    while (heldCallbacks.length) {
+      heldCallbacks.splice(0).forEach((cb) => cb());
+      for (let i = 0; i < 3; i++) await new Promise((resolve) => setImmediate(resolve));
+    }
+    assert.equal(written.length, N, 'every request answered: 1000 queued + 50 inline overload');
+    const realIds = written.filter((c) => !isOverload(c)).map((c) => JSON.parse(c).id);
+    assert.deepEqual(realIds, Array.from({ length: 1000 }, (_, i) => i + 1), 'queued responses complete in order');
+  });
+
+  test('parse errors count against the cap', async () => {
+    // OLD: writeResponse decremented `pending` for parse errors that were
+    // never incremented — each garbage line DEFLATED the counter, so a
+    // hostile client could send garbage to buy unlimited queue space for
+    // pipelined full responses.
+    const written = [];
+    let heldCallbacks = [];
+    const fakeStdout = {
+      write(chunk, cb) {
+        written.push(chunk);
+        heldCallbacks.push(cb);
+        return false;
+      }
+    };
+    const { serve } = await import('../server.js');
+    const { PassThrough } = await import('node:stream');
+    const stdin = new PassThrough();
+    const rl = serve({ stdin, stdout: fakeStdout });
+    const lines = [JSON.stringify({ jsonrpc: '2.0', id: 'first', method: 'ping' })];
+    for (let i = 0; i < 999; i++) lines.push('not-json');
+    lines.push(JSON.stringify({ jsonrpc: '2.0', id: 'over', method: 'ping' }));
+    stdin.write(lines.join('\n') + '\n');
+    stdin.end();
+    await new Promise((resolve) => rl.on('close', resolve));
+    for (let i = 0; i < 5; i++) await new Promise((resolve) => setImmediate(resolve));
+    const overloadCount = written.filter((c) => {
+      try { return JSON.parse(c).error?.code === -32000; } catch { return false; }
+    }).length;
+    assert.equal(overloadCount, 1, 'the request past the cap is refused: parse errors held the counter honest');
+    heldCallbacks.forEach((cb) => cb());
+  });
+
+  test('write errors are consumed per-link and the chain continues', async () => {
+    // Every write "fails" (callback receives EPIPE) yet returns true — the
+    // old implementation attached no error handling to ok=true writes; the
+    // new contract delivers the error TO the callback and keeps serving.
+    const written = [];
+    const fakeStdout = {
+      write(chunk, cb) {
+        written.push(chunk);
+        setTimeout(() => cb(new Error('EPIPE: client closed')), 1);
+        return true;
+      }
+    };
+    const { serve } = await import('../server.js');
+    const { PassThrough } = await import('node:stream');
+    const stdin = new PassThrough();
+    const rl = serve({ stdin, stdout: fakeStdout });
+    let drainedPromiseResolve;
+    const drainedPromise = new Promise((resolve) => { drainedPromiseResolve = resolve; });
+    rl.on('drained', () => { drainedPromiseResolve(); }); // register BEFORE writes: callbacks can fire within ~1ms
+    stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' }) + '\n');
+    stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'ping' }) + '\n');
+    stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'ping' }) + '\n');
+    stdin.end();
+    for (let i = 0; i < 100 && written.length < 3; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    assert.equal(written.length, 3, 'every response still attempts its write after per-link errors');
+    assert.deepEqual(written.map((c) => JSON.parse(c).id), [1, 2, 3]);
+    await drainedPromise;
   });
 });

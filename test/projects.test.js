@@ -269,3 +269,45 @@ describe('review batch 5 hardening', () => {
   });
 });
 
+
+// ---------------------------------------------------------------------------
+// Cubic round-1 follow-up: the ctimeMs cache-key row
+// ---------------------------------------------------------------------------
+
+describe('parse cache ctime key', () => {
+  test('same-size, same-mtime rewrite is re-read (the cp -p / rsync -t case)', () => {
+    // The pre-existing "edits are picked up" test rewrites via
+    // JSON.stringify of an object with an ADDED field — serialized size
+    // grows, so the (mtime, size) rows alone invalidate the entry and that
+    // test passes even with ctimeMs removed from the comparison. This test
+    // changes content at IDENTICAL serialized size and RESTORES the old
+    // mtime (utimesSync): only the ctime row can detect the rewrite.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pmo-mcp-ctime-'));
+    try {
+      const file = path.join(dir, 'p.json');
+      const mk = (pad) => JSON.stringify({ id: 'x', name: 'X', pad });
+      fs.writeFileSync(file, mk('aaaa'));
+      // Quantize the mtime to a whole ms BEFORE the first read: APFS mtimes
+      // carry sub-ms components, and utimesSync(Date) truncates to ms — an
+      // imprecise restore would miss the cache on the mtime row alone and
+      // let this test pass even without the ctime row (vacuously).
+      fs.utimesSync(file, new Date(), new Date(1_700_000_000_000));
+      withDir(dir, () => {
+        const first = getProject('x');
+        assert.equal(first.error, null);
+        assert.equal(first.project.pad, 'aaaa');
+        // Rewrite at the same size, then restore the exact pre-rewrite mtime
+        // — userspace cannot fake ctime, so the cache must re-read.
+        const before = fs.statSync(file);
+        assert.equal(before.mtimeMs, 1_700_000_000_000, 'mtime quantization must be exact for this test to be meaningful');
+        fs.writeFileSync(file, mk('bbbb'));
+        fs.utimesSync(file, before.atime, before.mtime);
+        const again = getProject('x');
+        assert.equal(again.error, null);
+        assert.equal(again.project.pad, 'bbbb', 'same-size same-mtime rewrite must not be served from cache');
+      });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

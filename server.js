@@ -379,40 +379,52 @@ export function handleRequest(request, handlers = HANDLERS) {
 export function serve({ stdin = process.stdin, stdout = process.stdout } = {}) {
   const rl = createInterface({ input: stdin, terminal: false });
   // Backpressure (review batch 5): when stdout's kernel buffer is full,
-  // write() returns false and the response must wait for 'drain' — or
-  // responses queue in memory unbounded. Writes are chained so responses
-  // stay IN ORDER: awaiting inline in the line handler would let the next
-  // line's response overtake a drained-but-delayed earlier one. The chain
-  // is error-proof: a rejected write (EPIPE when the client closes the
-  // pipe) is caught per-link so later responses still attempt to write,
-  // and the drain waiter settles on 'error' too (a stream that errors or
-  // closes while full would otherwise wedge the chain forever).
+  // Response writes are chained so responses stay IN ORDER: the next
+  // response is issued only after the previous write's COMPLETION CALLBACK
+  // runs. Links resolve on the callback, never on write()'s boolean return
+  // — on macOS, pipes are async and `true` does not mean flushed, so a
+  // link resolved on the return value would let direct-run process.exit(0)
+  // truncate buffered output. Write errors (EPIPE when the client closes
+  // the pipe) are delivered TO the callback, consumed there, and the chain
+  // continues with later responses; a destroyed stream settles its pending
+  // callbacks, so the chain cannot wedge.
   let tail = Promise.resolve();
-  let pending = 0;
+  let pending = 0; // admitted responses not yet fully written
   const MAX_PENDING = 1000;
-  const whenDrain = () =>
+  const writeResponse = (payload) =>
     new Promise((resolve) => {
-      const settle = () => {
-        stdout.off('drain', onDrain);
-        stdout.off('error', onError);
-        stdout.off('close', onClose);
+      try {
+        stdout.write(JSON.stringify(payload) + '\n', () => {
+          pending--;
+          resolve();
+        });
+      } catch {
+        pending--; // synchronous write error: fail-soft, keep serving
         resolve();
-      };
-      const onDrain = () => settle();
-      const onError = () => settle(); // treat stream error as drained
-      const onClose = () => settle(); // ...and stream close
-      stdout.once('drain', onDrain);
-      stdout.once('error', onError);
-      stdout.once('close', onClose);
+      }
     });
-  const writeResponse = (payload) => {
-    pending--;
-    try {
-      const ok = stdout.write(JSON.stringify(payload) + '\n');
-      return ok ? Promise.resolve() : whenDrain();
-    } catch {
-      return Promise.resolve(); // synchronous write error: fail-soft, keep serving
+  // Admission control: past MAX_PENDING the request is REFUSED, not
+  // retained — a hostile pipeliner (already violating the sequential
+  // -request convention MCP hosts follow) cannot grow server memory past
+  // the cap. The overload error is written inline; the stream's internal
+  // FIFO keeps it ordered behind previously issued writes. It is neither
+  // chained nor counted in `pending`.
+  const respond = (id, payload) => {
+    if (pending >= MAX_PENDING) {
+      try {
+        stdout.write(
+          JSON.stringify({
+            jsonrpc: '2.0',
+            id: id ?? null,
+            error: { code: -32000, message: `server overloaded: ${MAX_PENDING} responses queued, request dropped` }
+          }) + '\n',
+          () => {}
+        );
+      } catch {} // stream gone: nothing to deliver
+      return;
     }
+    pending++;
+    tail = tail.then(() => writeResponse(payload));
   };
   rl.on('line', (line) => {
     const trimmed = line.trim();
@@ -421,25 +433,12 @@ export function serve({ stdin = process.stdin, stdout = process.stdout } = {}) {
     try {
       request = JSON.parse(trimmed);
     } catch (error) {
-      tail = tail.then(() => writeResponse({ jsonrpc: '2.0', id: null, error: { code: -32700, message: `parse error: ${error.message}` } }));
+      respond(null, { jsonrpc: '2.0', id: null, error: { code: -32700, message: `parse error: ${error.message}` } });
       return;
     }
     const response = handleRequest(request);
     if (response === null) return;
-    // Backpressure cap: while the chain is blocked on drain, a hostile
-    // client pipelining thousands of requests would otherwise queue every
-    // response object in memory. Past the cap the OLDEST queued response
-    // is dropped and replaced in-band — the client already violated the
-    // sequential-request convention MCP hosts follow.
-    if (pending >= MAX_PENDING) {
-      response = {
-        jsonrpc: '2.0',
-        id: response.id ?? null,
-        error: { code: -32000, message: `server overloaded: ${MAX_PENDING} responses queued, request dropped` }
-      };
-    }
-    pending++;
-    tail = tail.then(() => writeResponse(response));
+    respond(response.id, response);
   });
   // HandleRequest is synchronous, but responses queue in the chain while
   // stdout applies backpressure — the direct-run exit path must await it.
