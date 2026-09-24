@@ -392,37 +392,55 @@ describe('review batch 5 hardening', () => {
     const { serve } = await import('../server.js');
     const { PassThrough } = await import('node:stream');
     const { EventEmitter } = await import('node:events');
-    const failWith = { code: 'EIO', message: 'EIO: redirected file gone' };
-    const fakeStdout = new class extends EventEmitter {
-      write(chunk, cb) {
-        setTimeout(() => {
-          const err = new Error(failWith.message);
-          err.code = failWith.code;
-          cb(err);
-          this.emit('error', err);
-        }, 1);
-        return true;
-      }
-    }();
-    const stdin = new PassThrough();
-    const rl = serve({ stdin, stdout: fakeStdout });
+    const makeStdout = (code, message, counters) =>
+      new class extends EventEmitter {
+        write(chunk, cb) {
+          counters.writes++;
+          setTimeout(() => {
+            const err = new Error(message);
+            err.code = code;
+            cb(err);
+            counters.emits++; // real streams emit the event after the callback
+            this.emit('error', err);
+          }, 1);
+          return true;
+        }
+      }();
+
+    // Phase 1 — EIO: must surface on stderr.
     const consoleError = t.mock.method(console, 'error', () => {});
-    stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' }) + '\n');
-    stdin.end();
+    const eioCounters = { writes: 0, emits: 0 };
+    const eioStdin = new PassThrough();
+    serve({ stdin: eioStdin, stdout: makeStdout('EIO', 'EIO: redirected file gone', eioCounters) });
+    eioStdin.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' }) + '\n');
+    eioStdin.end();
     for (let i = 0; i < 100 && consoleError.mock.callCount() === 0; i++) {
       await new Promise((resolve) => setTimeout(resolve, 5));
     }
+    assert.equal(eioCounters.writes, 1, 'the request reached the fake stdout (non-vacuity)');
     assert.equal(consoleError.mock.callCount(), 1, 'exactly one stderr diagnostic for the EIO failure');
     assert.match(consoleError.mock.calls[0].arguments[0], /EIO/);
     assert.match(consoleError.mock.calls[0].arguments[0], /stdout error/);
-
-    // EPIPE: same failure path, but quiet — client going away is expected.
     consoleError.mock.restore();
-    failWith.code = 'EPIPE';
-    failWith.message = 'EPIPE: client closed';
+
+    // Phase 2 — EPIPE: must stay quiet. FRESH serve() + stdin: phase 1's
+    // stdin is already ended, and a second write to it is rejected with
+    // ERR_STREAM_WRITE_AFTER_END before ever reaching the server — the
+    // assertion below would pass vacuously (both bots, round 2). The
+    // writes/emits counters prove the request actually exercised the path:
+    // if serve() dropped its 'error' consumer, the unconditional emit here
+    // becomes an unhandled 'error' event and this test FAILS.
+    const epipeCounters = { writes: 0, emits: 0 };
+    const epipeStdout = makeStdout('EPIPE', 'EPIPE: client closed', epipeCounters);
+    const epipeStdin = new PassThrough();
+    serve({ stdin: epipeStdin, stdout: epipeStdout });
     const consoleError2 = t.mock.method(console, 'error', () => {});
-    stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'ping' }) + '\n');
-    for (let i = 0; i < 20; i++) await new Promise((resolve) => setTimeout(resolve, 5));
+    epipeStdin.write(JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'ping' }) + '\n');
+    for (let i = 0; i < 20 && epipeCounters.emits < 1; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    assert.equal(epipeCounters.writes, 1, 'the request reached the fake stdout (non-vacuity)');
+    assert.equal(epipeCounters.emits, 1, "the stream 'error' event fired (the guard was exercised)");
     assert.equal(consoleError2.mock.callCount(), 0, 'EPIPE is expected and must not spam stderr');
   });
 });
