@@ -22,8 +22,8 @@ node demo/demo.mjs                           # end-to-end demo transcript
 
 > **Node version:** the server itself runs on Node ≥ 18 (zero-dep ESM, no
 > test-runner involvement). The **test suite** uses `node:test`'s
-> `describe`/`it` API, which was experimental on Node 18 and stabilized in
-> Node 20 — run `npm test` on Node ≥ 20.
+> `describe`/`it` API, which exists from Node 18.6 (v16.17) but only left
+> its experimental phase in Node 20 — run `npm test` on Node ≥ 20.
 
 Serve over stdio (what MCP hosts launch):
 
