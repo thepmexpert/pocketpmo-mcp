@@ -275,7 +275,7 @@ describe('review batch 5 hardening', () => {
 // ---------------------------------------------------------------------------
 
 describe('parse cache ctime key', () => {
-  test('same-size, same-mtime rewrite is re-read (the cp -p / rsync -t case)', () => {
+  test('same-size, same-mtime rewrite is re-read (the cp -p / rsync -t case)', (t) => {
     // The pre-existing "edits are picked up" test rewrites via
     // JSON.stringify of an object with an ADDED field — serialized size
     // grows, so the (mtime, size) rows alone invalidate the entry and that
@@ -302,6 +302,15 @@ describe('parse cache ctime key', () => {
         assert.equal(before.mtimeMs, 1_700_000_000_000, 'mtime quantization must be exact for this test to be meaningful');
         fs.writeFileSync(file, mk('bbbb'));
         fs.utimesSync(file, before.atime, before.mtime);
+        const after = fs.statSync(file);
+        if (after.ctimeMs === before.ctimeMs) {
+          // This filesystem never bumped ctime (FAT-like granularity): the
+          // cache cannot distinguish this rewrite here at all — skip rather
+          // than fail on a guarantee the platform cannot support. RETURN:
+          // t.skip() only marks the result; the remaining assertions would
+          // still run (and fail on the stale cache entry).
+          return t.skip('filesystem did not bump ctime; rewrite is indistinguishable here');
+        }
         const again = getProject('x');
         assert.equal(again.error, null);
         assert.equal(again.project.pad, 'bbbb', 'same-size same-mtime rewrite must not be served from cache');
