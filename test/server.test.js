@@ -269,7 +269,12 @@ describe('review batch 5 hardening', () => {
     };
     const { serve } = await import('../server.js');
     const { PassThrough } = await import('node:stream');
-    const stdin = new PassThrough();
+    // 1 MB high-water mark: all 1050 lines (~58 KB) arrive in ONE data
+    // event, so readline emits every line synchronously and the admission
+    // decision is deterministic (with the 16 KB default the tail lines sit
+    // in the PassThrough buffer and trickle in AFTER resume, making the
+    // answered-count nondeterministic).
+    const stdin = new PassThrough({ highWaterMark: 1 << 20 });
     const rl = serve({ stdin, stdout: fakeStdout });
     const lines = [];
     for (let i = 1; i <= 1050; i++) lines.push(JSON.stringify({ jsonrpc: '2.0', id: i, method: 'ping' }));
@@ -287,10 +292,11 @@ describe('review batch 5 hardening', () => {
       heldCallbacks.splice(0).forEach((cb) => cb());
       for (let i = 0; i < 3; i++) await new Promise((resolve) => setImmediate(resolve));
     }
-    assert.ok(written.length >= 1000 && written.length <= 1050, `every request under the cap answered, excess dropped (got ${written.length})`);
-    const ids = written.map((c) => JSON.parse(c).id);
-    const ascending = ids.every((id, i) => i === 0 || ids[i - 1] < id);
-    assert.ok(ascending, 'responses stay strictly in request order');
+    // EXACT: exactly MAX_PENDING requests admitted, exactly 50 dropped. A
+    // range here would let a regression that drops admission entirely
+    // (answering all 1050, ascending) pass (cubic round 3).
+    assert.equal(written.length, 1000, 'exactly MAX_PENDING requests admitted, excess dropped');
+    assert.deepEqual(written.map((c) => JSON.parse(c).id), Array.from({ length: 1000 }, (_, i) => i + 1));
   });
 
   test('parse errors count against the cap', async () => {
@@ -339,25 +345,28 @@ describe('review batch 5 hardening', () => {
     // old implementation attached no error handling to ok=true writes; the
     // new contract delivers the error TO the callback and keeps serving.
     // Real streams ALSO emit 'error' on the stream object after failing a
-    // callback (verified with a failing _write) — the fake reproduces that
-    // so the server's 'error' consumer is what stands between an async
-    // EPIPE and an uncaught-event process crash.
+    // callback (verified with a failing _write). The fake is
+    // EventEmitter-backed and emits UNCONDITIONALLY: if serve() ever stops
+    // registering its stdout 'error' consumer, the emit here becomes an
+    // unhandled 'error' event and this test FAILS — that is the crash
+    // guard this suite actually pins (cubic round 3).
     const written = [];
-    let errorListener = null;
-    const fakeStdout = {
+    const { serve } = await import('../server.js');
+    const { PassThrough } = await import('node:stream');
+    const { EventEmitter } = await import('node:events');
+    const fakeStdout = new class extends EventEmitter {
       write(chunk, cb) {
         written.push(chunk);
         setTimeout(() => {
           const err = new Error('EPIPE: client closed');
-          cb(err);
-          if (errorListener) errorListener(err); // the stream's 'error' emission
+          err.code = 'EPIPE'; // real stream errors carry the code; the
+          // stderr surface must stay quiet for EPIPE (client gone = expected)
+          cb(err);              // callback contract: error delivered here
+          this.emit('error', err); // ...and real streams emit the event too
         }, 1);
         return true;
-      },
-      on(event, cb) { if (event === 'error') errorListener = cb; }
-    };
-    const { serve } = await import('../server.js');
-    const { PassThrough } = await import('node:stream');
+      }
+    }();
     const stdin = new PassThrough();
     const rl = serve({ stdin, stdout: fakeStdout });
     let drainedPromiseResolve;
@@ -373,5 +382,47 @@ describe('review batch 5 hardening', () => {
     assert.equal(written.length, 3, 'every response still attempts its write after per-link errors');
     assert.deepEqual(written.map((c) => JSON.parse(c).id), [1, 2, 3]);
     await drainedPromise;
+  });
+
+  test('non-EPIPE stdout errors surface on stderr, EPIPE stays quiet', async (t) => {
+    // The stdout 'error' consumer prevents the uncaught-event crash, but the
+    // fail-soft posture is "never crash", not "never tell anyone": EPIPE
+    // (client gone) is expected and quiet; EIO/ENOSPC mean output is being
+    // LOST and must be diagnosable.
+    const { serve } = await import('../server.js');
+    const { PassThrough } = await import('node:stream');
+    const { EventEmitter } = await import('node:events');
+    const failWith = { code: 'EIO', message: 'EIO: redirected file gone' };
+    const fakeStdout = new class extends EventEmitter {
+      write(chunk, cb) {
+        setTimeout(() => {
+          const err = new Error(failWith.message);
+          err.code = failWith.code;
+          cb(err);
+          this.emit('error', err);
+        }, 1);
+        return true;
+      }
+    }();
+    const stdin = new PassThrough();
+    const rl = serve({ stdin, stdout: fakeStdout });
+    const consoleError = t.mock.method(console, 'error', () => {});
+    stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' }) + '\n');
+    stdin.end();
+    for (let i = 0; i < 100 && consoleError.mock.callCount() === 0; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    assert.equal(consoleError.mock.callCount(), 1, 'exactly one stderr diagnostic for the EIO failure');
+    assert.match(consoleError.mock.calls[0].arguments[0], /EIO/);
+    assert.match(consoleError.mock.calls[0].arguments[0], /stdout error/);
+
+    // EPIPE: same failure path, but quiet — client going away is expected.
+    consoleError.mock.restore();
+    failWith.code = 'EPIPE';
+    failWith.message = 'EPIPE: client closed';
+    const consoleError2 = t.mock.method(console, 'error', () => {});
+    stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'ping' }) + '\n');
+    for (let i = 0; i < 20; i++) await new Promise((resolve) => setTimeout(resolve, 5));
+    assert.equal(consoleError2.mock.callCount(), 0, 'EPIPE is expected and must not spam stderr');
   });
 });

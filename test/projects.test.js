@@ -306,8 +306,10 @@ describe('parse cache ctime key', () => {
         if (after.ctimeMs === before.ctimeMs) {
           // This filesystem never bumped ctime (FAT-like granularity): the
           // cache cannot distinguish this rewrite here at all — skip rather
-          // than fail on a guarantee the platform cannot support.
-          t.skip('filesystem did not bump ctime; rewrite is indistinguishable here');
+          // than fail on a guarantee the platform cannot support. RETURN:
+          // t.skip() only marks the result; the remaining assertions would
+          // still run (and fail on the stale cache entry).
+          return t.skip('filesystem did not bump ctime; rewrite is indistinguishable here');
         }
         const again = getProject('x');
         assert.equal(again.error, null);

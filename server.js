@@ -396,12 +396,12 @@ export function serve({ stdin = process.stdin, stdout = process.stdout } = {}) {
       try {
         stdout.write(JSON.stringify(payload) + '\n', () => {
           pending--;
-          if (pending < MAX_PENDING) rl.resume(); // unblock paused input
+          if (pending < MAX_PENDING && !inputClosed) rl.resume(); // unblock paused input
           resolve();
         });
       } catch {
         pending--; // synchronous write error: fail-soft, keep serving
-        if (pending < MAX_PENDING) rl.resume();
+        if (pending < MAX_PENDING && !inputClosed) rl.resume();
         resolve();
       }
     });
@@ -410,8 +410,21 @@ export function serve({ stdin = process.stdin, stdout = process.stdout } = {}) {
   // both). Without a listener, an async EPIPE (client closed the pipe) is
   // an uncaught 'error' event that kills the process. The chain already
   // settles per-link via callbacks — consuming the event here is what keeps
-  // the process alive to reach its clean exit.
-  stdout.on('error', () => {});
+  // the process alive to reach its clean exit. Minimal write-only sinks
+  // (only .write — the previous documented contract) have no .on; they
+  // forgo the crash guard by construction.
+  if (typeof stdout.on === 'function') {
+    stdout.on('error', (err) => {
+      // stderr is the MCP log channel, never the protocol channel — safe
+      // even when stdout is fully broken. EPIPE (client gone) is expected
+      // and quiet; anything else (EIO, ENOSPC on a redirected file) means
+      // output is being LOST and must be diagnosable, not swallowed — the
+      // fail-soft posture is "never crash", not "never tell anyone".
+      if (err && err.code !== 'EPIPE') {
+        console.error(`pocketpmo-mcp: stdout error: ${err.code ?? ''} ${err.message ?? err}`.trimEnd());
+      }
+    });
+  }
   // Admission control: past MAX_PENDING, PAUSE reading stdin. Backpressure
   // then propagates at the kernel level — the client's pipe buffer fills
   // and ITS writes block — so server memory stays bounded no matter how
@@ -447,7 +460,13 @@ export function serve({ stdin = process.stdin, stdout = process.stdout } = {}) {
   });
   // HandleRequest is synchronous, but responses queue in the chain while
   // stdout applies backpressure — the direct-run exit path must await it.
+  // inputClosed gates rl.resume(): resume() on a closed Interface throws
+  // ERR_USE_AFTER_CLOSE (a capped-then-closed client fires write callbacks
+  // after close), which would crash via the very callbacks meant to keep
+  // the process alive.
+  let inputClosed = false;
   rl.on('close', () => {
+    inputClosed = true;
     tail.catch(() => {}).then(() => rl.emit('drained'));
   });
   return rl;
