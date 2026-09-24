@@ -9,9 +9,9 @@
 version: "1"
 ignore:
   # R-EFEEF "Unsafe Regular Expression" (1 finding, warning),
-  # lib/calculators.js:1087 — ISO_STRICT.test(value), value = date strings
-  # from project export JSON (external input). FALSE POSITIVE, traced and
-  # measured 2026-09-24:
+  # lib/calculators.js — literal ISO_STRICT at :1087, sink ISO_STRICT.test(value)
+  # at :1110; value = date strings from project export JSON (external input).
+  # FALSE POSITIVE, traced and measured 2026-09-24:
   # 1. No pattern injection: ISO_STRICT is a module-literal regex; the repo
   #    contains zero `new RegExp` sites (grep-verified), so attacker input
   #    can never become part of a pattern.
