@@ -1,4 +1,4 @@
-import { test, describe } from 'node:test';
+import { test, describe, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -19,8 +19,18 @@ function makeTempDir(files) {
   for (const [name, content] of Object.entries(files)) {
     fs.writeFileSync(path.join(dir, name), content);
   }
+  createdDirs.push(dir);
   return dir;
 }
+
+// Every makeTempDir/mkdtemp dir is removed after the file's tests finish —
+// previously ~10 dirs leaked into os.tmpdir() per run (cubic round 3).
+const createdDirs = [];
+after(() => {
+  for (const dir of createdDirs) {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 function withDir(dir, fn) {
   const prev = process.env.PMO_PROJECTS_DIR;
@@ -114,6 +124,53 @@ describe('getProject', () => {
       const { error } = getProject('nope');
       assert.ok(error.includes('no project matching'));
       assert.ok(error.includes('1'));
+    });
+  });
+
+  // Regression (cubic round 3, defect pre-existing since v0.1): `name` is
+  // hand-editable JSON and can be any value. A numeric name made
+  // name.toLowerCase() throw INSIDE the scan — one weird file poisoned
+  // every name lookup AND the error-listing path for the whole dir.
+  test('non-string name values cannot break lookups (numeric name)', () => {
+    const dir = makeTempDir({
+      'a.json': JSON.stringify({ id: 7, name: 404 }),
+      'b.json': good
+    });
+    withDir(dir, () => {
+      // listProjects always tolerated it — metadata keeps the raw value
+      const { projects } = listProjects();
+      assert.equal(projects.length, 2);
+      // name lookup of the VALID sibling must not be poisoned by a.json
+      const byName = getProject('alpha');
+      assert.equal(byName.error, null);
+      assert.equal(byName.project.id, 1);
+      // the numeric name is matched by its stringified value
+      const numeric = getProject('404');
+      assert.equal(numeric.error, null);
+      assert.equal(numeric.project.id, 7);
+      // and the error path survives: it iterates ALL candidates
+      const miss = getProject('nope');
+      assert.equal(miss.project, null);
+      assert.ok(miss.error.includes("no project matching 'nope'"));
+      assert.ok(miss.error.includes('7'), 'available ids still listed');
+    });
+  });
+
+  test('falsy and object name values do not break lookups either', () => {
+    const dir = makeTempDir({
+      'empty-name.json': JSON.stringify({ id: 'e', name: '' }),
+      'zero-name.json': JSON.stringify({ id: 'z', name: 0 }),
+      'obj-name.json': JSON.stringify({ id: 'o', name: { nested: true } })
+    });
+    withDir(dir, () => {
+      // '' and 0 fall back to the id (unchanged || semantics)
+      assert.equal(getProject('e').project.id, 'e');
+      assert.equal(getProject('z').project.id, 'z');
+      // an object name stringifies without throwing
+      assert.equal(getProject('[object object]').project.id, 'o');
+      const miss = getProject('missing');
+      assert.equal(miss.project, null);
+      assert.ok(miss.error.includes('no project matching'));
     });
   });
 
