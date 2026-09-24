@@ -149,7 +149,7 @@ describe('tool calls against bundled sample project', () => {
       assert.equal(r.result.isError, true);
       const text = r.result.content[0].text;
       assert.ok(text.includes("no project matching 'alpha'"));
-      assert.ok(text.includes('unreadable files skipped'));
+      assert.ok(text.includes('files skipped (invalid or unreadable)'));
       assert.ok(text.includes('failed to parse alpha.json'));
       assert.ok(!text.includes(dir), 'dir must not leak into the error');
     } finally {
