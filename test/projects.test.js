@@ -439,15 +439,35 @@ describe('project repository: refresh / invalidate / facade', () => {
       refresh();
       const first = getProject('alpha');
       assert.equal(first.error, null);
-      const cleared = refresh();
-      assert.ok(cleared >= 1, 'refresh reports how many entries it dropped');
-      assert.equal(diagnostics().entries, 0, 'cache is empty after refresh');
       const d0 = diagnostics();
-      const second = getProject('alpha');
+      const cleared = refresh();
       const d1 = diagnostics();
+      assert.ok(cleared >= 1, 'refresh reports how many entries it dropped');
+      assert.equal(d1.evictions - d0.evictions, cleared, 'manual drops are counted as evictions');
+      assert.equal(diagnostics().entries, 0, 'cache is empty after refresh');
+      const d2 = diagnostics();
+      const second = getProject('alpha');
+      const d3 = diagnostics();
       assert.equal(second.error, null);
       assert.notEqual(second.project, first.project, 'a fresh parse, not the old object');
-      assert.equal(d1.misses - d0.misses, 1, 'refresh forces exactly one re-read');
+      assert.equal(d3.misses - d2.misses, 1, 'refresh forces exactly one re-read');
+    });
+  });
+
+  test('cache limits are clamped to sane minimums (no impossible caps)', () => {
+    const dir = makeTempDir({ 'alpha.json': good });
+    withEnv('PMO_CACHE_MAX_ENTRIES', '0.5', () => {
+      withEnv('PMO_CACHE_MAX_BYTES', '0.25', () => {
+        withDir(dir, () => {
+          refresh();
+          const d = diagnostics();
+          assert.equal(d.maxEntries, 1, 'fractional entry limit clamps to 1');
+          assert.equal(d.maxBytes, 1, 'fractional byte limit clamps to 1');
+          const { project, error } = getProject('alpha');
+          assert.equal(error, null, 'lookups stay correct under an absurd limit');
+          assert.equal(project.id, 1);
+        });
+      });
     });
   });
 
