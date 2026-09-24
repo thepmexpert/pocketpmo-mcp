@@ -862,3 +862,301 @@ test('sweep: present-but-invalid distribution mean is reported', () => {
     issues.some((i) => i.activityId === 'x' && /mean is present but not a usable number/.test(i.message))
   );
 });
+
+// --- External review #29-#31: raw-distribution reporting + scenario gaps ---
+
+test('#30 raw distributions: inverted triple is repaired AND reported (no silent 1-day fallback)', () => {
+  // Pre-fix this sampled the 1-day fallback with zero issues: a silent
+  // fallback on critical data. Now the raw path shares buildDistributions'
+  // single normalization point (sort-and-report).
+  const r = runMonteCarlo({
+    activities: [{ id: 'a', duration: 5, predecessors: [] }],
+    distributions: { a: { type: 'triangular', optimistic: 10, mostLikely: 5, pessimistic: 2 } },
+    iterations: 500
+  });
+  assert.ok(
+    r.issues.some((i) => i.field === 'distribution' && /out of order/.test(i.message)),
+    'inverted raw triple must be reported, got: ' + JSON.stringify(r.issues)
+  );
+  // Sampled mean must reflect the SORTED triple (2,5,10 -> mean 17/3 ≈ 5.67),
+  // not the 1-day fallback (old defect produced mean 1).
+  assert.ok(r.mean > 4, `mean ${r.mean} should reflect the repaired triple, not the 1-day fallback`);
+});
+
+test('#30 raw distributions: unknown type is reported, not silent', () => {
+  const r = runMonteCarlo({
+    activities: [{ id: 'a', duration: 5, predecessors: [] }],
+    distributions: { a: { type: 'banana', optimistic: 1, mostLikely: 2, pessimistic: 3 } },
+    iterations: 200
+  });
+  assert.ok(
+    r.issues.some((i) => /unknown distribution type 'banana'/.test(i.message)),
+    'unknown type must be reported'
+  );
+});
+
+test('#30 raw distributions: negative stdDev and non-object spec are reported', () => {
+  const r = runMonteCarlo({
+    activities: [
+      { id: 'a', duration: 5, predecessors: [] },
+      { id: 'b', duration: 5, predecessors: ['a'] }
+    ],
+    distributions: { a: { type: 'normal', mean: 5, stdDev: -2 }, b: 42 },
+    iterations: 200
+  });
+  assert.ok(r.issues.some((i) => i.activityId === 'a' && /negative stdDev/.test(i.message)));
+  assert.ok(
+    r.issues.some((i) => i.activityId === 'b' && /not an object/.test(i.message)),
+    'non-object spec must be reported: ' + JSON.stringify(r.issues)
+  );
+  // 'b' must still SAMPLE from its duration-derived default (5), not the
+  // 1-day fallback (CodeRabbit: partial maps must not understate duration).
+  assert.ok(r.mean > 3, `mean ${r.mean} reflects duration-derived defaults, not 1-day fallbacks`);
+});
+
+test('buildDistributions: non-object specs (primitives, arrays) are reported, not silent (cubic P2)', () => {
+  const { distributions: d, issues } = buildDistributions([
+    { id: 'p', duration: 10, distribution: 42 },
+    { id: 'q', duration: 10, distribution: 'abc' },
+    { id: 'r', duration: 10, distribution: [] },
+    { id: 'n', duration: 10, distribution: null }
+  ]);
+  for (const id of ['p', 'q', 'r', 'n']) {
+    assert.ok(
+      issues.some((i) => i.activityId === id && /not an object/.test(i.message)),
+      `non-object spec for ${id} must be reported: ` + JSON.stringify(issues)
+    );
+    // A rejected spec still maps to the duration-derived default triple —
+    // never a null entry, never a silently "valid-looking" normalized spec.
+    assert.equal(d[id].type, 'triangular', `d[${id}].type`);
+    assert.equal(d[id].optimistic, 7, `d[${id}].optimistic`);
+    assert.equal(d[id].mostLikely, 10, `d[${id}].mostLikely`);
+    assert.equal(d[id].pessimistic, 15, `d[${id}].pessimistic`);
+  }
+});
+
+test('#30 raw distributions: array spec is reported centrally and samples the default (cubic P2)', () => {
+  const r = runMonteCarlo({
+    activities: [{ id: 'a', duration: 4, predecessors: [] }],
+    distributions: { a: [] },
+    iterations: 200
+  });
+  assert.ok(
+    r.issues.some((i) => i.activityId === 'a' && /not an object/.test(i.message)),
+    'array spec must be reported centrally: ' + JSON.stringify(r.issues)
+  );
+  assert.ok(r.mean > 3, `mean ${r.mean} reflects the duration-derived default, not the 1-day fallback`);
+});
+
+test('#30 raw distributions: null activities return issues, never throw (round-3 P1)', () => {
+  const r = runMonteCarlo({
+    activities: [null, { id: 'a', duration: 5, predecessors: [] }],
+    distributions: { a: { min: 1, mode: 2, max: 3 } },
+    iterations: 100
+  });
+  assert.ok(r.issues.some((i) => i.field === 'id' && /missing id/.test(i.message)));
+  assert.ok(r.iterations === 100, 'run completes instead of throwing');
+});
+
+test('#30 raw distributions: unmatched keys are reported (round-3 P2)', () => {
+  const r = runMonteCarlo({
+    activities: [{ id: 'task', duration: 4, predecessors: [] }],
+    distributions: { task: { min: 1, mode: 2, max: 3 }, tsk: 42 },
+    iterations: 100
+  });
+  assert.ok(
+    r.issues.some((i) => /distribution key 'tsk' matches no activity id/.test(i.message)),
+    'unmatched key must be reported: ' + JSON.stringify(r.issues)
+  );
+});
+
+test('#30 raw distributions: unusable stdDev is reported before its fallback', () => {
+  const r = runMonteCarlo({
+    activities: [{ id: 'a', duration: 5, distribution: { type: 'normal', mean: 5, stdDev: 'invalid' } }],
+    iterations: 100
+  });
+  assert.ok(
+    r.issues.some((i) => i.activityId === 'a' && /stdDev is present but not a usable number/.test(i.message)),
+    JSON.stringify(r.issues)
+  );
+});
+
+test('#30 raw distributions: null activity never distorts statistics (round-4 P2)', () => {
+  // cubic round-4: a null entry must not become a phantom parallel path —
+  // with duration 0.5, a phantom 1-day path would dominate and roughly
+  // double the mean.
+  const dists = { a: { min: 0.35, mode: 0.5, max: 0.75 } };
+  const withNull = runMonteCarlo({
+    activities: [null, { id: 'a', duration: 0.5, predecessors: [] }],
+    distributions: dists,
+    iterations: 200
+  });
+  const clean = runMonteCarlo({
+    activities: [{ id: 'a', duration: 0.5, predecessors: [] }],
+    distributions: dists,
+    iterations: 200
+  });
+  assert.equal(withNull.mean, clean.mean, `mean ${withNull.mean} must equal clean ${clean.mean} (no phantom path)`);
+  // Vacuous-pass guard (CodeRabbit round-5): the equality above is meaningless
+  // if BOTH runs skipped the valid activity (cpmNetwork([]) -> 0 == 0).
+  // Assert the clean run actually sampled: ~0.54, far above a 0-length path.
+  assert.ok(clean.mean > 0.45, `clean mean ${clean.mean} proves the activity was sampled`);
+  assert.ok(withNull.issues.some((i) => i.field === 'id'), 'null entry still reported');
+});
+
+test('#30 raw distributions: stdDev null is reported like other unusable fields (round-4 P2)', () => {
+  const r = runMonteCarlo({
+    activities: [{ id: 'a', duration: 5, distribution: { type: 'normal', mean: 5, stdDev: null } }],
+    iterations: 100
+  });
+  assert.ok(
+    r.issues.some((i) => i.activityId === 'a' && /stdDev is present but not a usable number/.test(i.message)),
+    'stdDev null must be reported: ' + JSON.stringify(r.issues)
+  );
+});
+
+test('#30 raw distributions: clean specs stay untouched (no spurious issues)', () => {
+  // Vacuous-test guard: the fix must not alter well-formed input behavior.
+  const acts = [{ id: 'a', duration: 5, predecessors: [] }];
+  const before = runMonteCarlo({ activities: structuredClone(acts), iterations: 400 });
+  const after = runMonteCarlo({
+    activities: structuredClone(acts),
+    distributions: { a: { type: 'triangular', optimistic: 3.5, mostLikely: 5, pessimistic: 7.5 } },
+    iterations: 400
+  });
+  assert.equal(after.issues.length, 0);
+  assert.equal(after.mean, before.mean); // same spec shape the builder derives
+});
+
+test('#31 CPM: zero-duration activity resolves with zero float and is critical', () => {
+  const net = cpmNetwork([{ id: 'z', duration: 0, predecessors: [] }]);
+  assert.equal(net.projectDuration, 0);
+  assert.equal(net.activities[0].float, 0);
+  assert.equal(net.activities[0].critical, true);
+  // And a zero-duration predecessor resolves downstream activities correctly.
+  const net2 = cpmNetwork([
+    { id: 'z', duration: 0, predecessors: [] },
+    { id: 'b', duration: 4, predecessors: ['z'] }
+  ]);
+  assert.equal(net2.activities[1].es, 0);
+  assert.equal(net2.activities[1].ef, 4);
+  assert.equal(net2.projectDuration, 4);
+});
+
+test('#31 CPM: disconnected activities are independent components, each terminal to maxEF', () => {
+  const net = cpmNetwork([
+    { id: 'a', duration: 3, predecessors: [] },
+    { id: 'b', duration: 9, predecessors: [] },
+    { id: 'c', duration: 2, predecessors: ['a'] }
+  ]);
+  assert.equal(net.projectDuration, 9);
+  const byId = Object.fromEntries(net.activities.map((a) => [a.id, a]));
+  // 'a' has a successor so it can have float; 'b' is an independent terminal.
+  assert.equal(byId.b.lf, 9);
+  assert.equal(byId.b.float, 0);
+  assert.equal(byId.c.ef, 5);
+  assert.equal(byId.c.float, 4);
+  assert.equal(byId.c.critical, false);
+});
+
+test('#31 MC: serial network mean ≈ 2× single and stdDev exceeds it (variance accumulates)', () => {
+  // Serial: variance accumulates by sum; compare against a single-activity run.
+  const one = runMonteCarlo({ activities: [{ id: 'a', duration: 5, predecessors: [] }], iterations: 3000 });
+  const serial = runMonteCarlo({
+    activities: [
+      { id: 'a', duration: 5, predecessors: [] },
+      { id: 'b', duration: 5, predecessors: ['a'] }
+    ],
+    iterations: 3000
+  });
+  // Default triangular: o=0.7d, m=d, p=1.5d. Serial mean ≈ 2x single mean.
+  assert.ok(Math.abs(serial.mean - 2 * one.mean) < 0.5, `serial ${serial.mean} ≈ 2 × single ${one.mean}`);
+  assert.ok(serial.stdDev > one.stdDev, 'serial stdDev exceeds single-activity stdDev');
+});
+
+test('#31 MC: truncated normal never samples negative and is deterministic per seed', () => {
+  // mean 1, stdDev 3 -> ~37% of the pre-truncation mass is below zero; the
+  // sampler truncates at 0, so every observed duration is >= 0 and the
+  // empirical mean EXCEEDS the configured mean.
+  // Explicit rngs on BOTH runs (cubic: default IS makeRng(42), so a
+  // default-vs-explicit pair is identical by construction — vacuous).
+  const r = runMonteCarlo({
+    activities: [{ id: 'a', duration: 1, distribution: { type: 'normal', mean: 1, stdDev: 3 } }],
+    iterations: 20000,
+    rng: makeRng(7)
+  });
+  assert.ok(r.percentiles.p10 >= 0, 'no negative durations');
+  assert.ok(r.mean > 1, `truncated mean ${r.mean} exceeds configured pre-truncation mean 1`);
+  const r2 = runMonteCarlo({
+    activities: [{ id: 'a', duration: 1, distribution: { type: 'normal', mean: 1, stdDev: 3 } }],
+    iterations: 20000,
+    rng: makeRng(7)
+  });
+  assert.equal(r.mean, r2.mean);
+});
+
+test('#31 MC: single deterministic activity gives an exact point-mass distribution', () => {
+  const r = runMonteCarlo({
+    activities: [{ id: 'a', duration: 7, distribution: { type: 'triangular', optimistic: 7, mostLikely: 7, pessimistic: 7 } }],
+    iterations: 300,
+    targets: [6.9, 7, 7.1]
+  });
+  assert.equal(r.mean, 7);
+  assert.equal(r.stdDev, 0);
+  assert.deepEqual(r.percentiles, { p10: 7, p50: 7, p90: 7 });
+  assert.deepEqual(
+    r.probabilityByTarget.map((t) => t.probability),
+    [0, 1, 1]
+  );
+});
+
+test('#31 EVM: zero budget with complete milestones earns zero, metrics stay finite', () => {
+  const r = evmMetrics({
+    budget: 0,
+    milestones: [{ id: 'm1', percentage: 100, cost: 100, progress: 1 }],
+    startDate: '2026-01-01',
+    endDate: '2026-02-01',
+    statusDate: '2026-01-20'
+  });
+  assert.equal(r.earnedValue, 0);
+  assert.equal(r.actualCost, 100);
+  assert.equal(r.cpi, 0);
+  assert.equal(r.eac, null); // #28 policy: null EAC when CPI <= 0
+  assert.equal(r.vac, null);
+});
+
+test('#31 EVM: DST spring-forward boundary does not distort date-only timeline math', () => {
+  // US DST 2026: Mar 8. A 20-day schedule spanning it must still be exact
+  // calendar days (UTC day arithmetic), not 23/25-hour wall-clock days.
+  // Pin a DST-observing TZ (cubic: a UTC CI runner can't catch local-time
+  // regressions) and restore it whatever happens.
+  const prevTZ = process.env.TZ;
+  process.env.TZ = 'America/New_York';
+  try {
+    const r = evmMetrics({
+      budget: 1000,
+      milestones: [{ id: 'm', percentage: 50, cost: 0, progress: 1 }],
+      startDate: '2026-03-01',
+      endDate: '2026-03-21',
+      statusDate: '2026-03-11' // exactly 10 of 20 days
+    });
+    assert.equal(r.timeline.projectDurationDays, 20);
+    assert.equal(r.timeline.elapsedDays, 10);
+    assert.ok(Math.abs(r.timeline.actualTimePercentage - 0.5) < 1e-9);
+    assert.ok(Math.abs(r.plannedValue - 500) < 1e-9);
+  } finally {
+    if (prevTZ === undefined) delete process.env.TZ;
+    else process.env.TZ = prevTZ;
+  }
+});
+
+test('#31 EVM: DST boundary via offset timestamps keeps sub-day precision', () => {
+  const r = evmMetrics({
+    budget: 1000,
+    milestones: [{ id: 'm', percentage: 50, cost: 0, progress: 1 }],
+    startDate: '2026-03-08T00:00:00Z',
+    endDate: '2026-03-08T12:00:00Z',
+    statusDate: '2026-03-08T06:00:00Z' // halfway, spans the US spring-forward instant
+  });
+  assert.ok(Math.abs(r.timeline.actualTimePercentage - 0.5) < 1e-9, `got ${r.timeline.actualTimePercentage}`);
+});
