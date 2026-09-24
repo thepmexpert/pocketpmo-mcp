@@ -121,13 +121,22 @@ describe('getProject', () => {
     });
   });
 
-  test('empty dir error keeps parse warnings when NO valid project exists', () => {
+  test('all-invalid-files error keeps parse warnings when NO valid project exists', () => {
     const dir = makeTempDir({ 'corrupt.json': '{ not valid json' });
     withDir(dir, () => {
       const { project, error } = getProject('1');
       assert.equal(project, null);
       assert.ok(error.startsWith('no project files in'));
       assert.ok(error.includes('failed to parse'), 'diagnostics preserved in error');
+    });
+  });
+
+  test('unreadable dir reports the readdir cause once, not a double path', () => {
+    withDir('/nonexistent/pmo-dir-xyz', () => {
+      const { project, error } = getProject('1');
+      assert.equal(project, null);
+      assert.ok(error.startsWith('projects dir not readable:'), `got: ${error}`);
+      assert.equal(error.split('/nonexistent').length - 1, 1, 'path appears once');
     });
   });
 });
