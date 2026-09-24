@@ -58,7 +58,7 @@ describe('tools', () => {
       assert.equal(r.result.isError, true, `${name} must be rejected in-band`);
       assert.match(r.result.content[0].text, /^unknown tool:/);
     }
-    // non-string names too — the guard normalizes before the lookup
+    // non-string names too — the typeof gate rejects them before the lookup
     for (const name of [null, 42, { evil: true }, ['constructor']]) {
       const r = handleRequest(req(51, 'tools/call', { name, arguments: {} }));
       assert.equal(r.result.isError, true);
