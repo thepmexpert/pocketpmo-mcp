@@ -379,11 +379,53 @@ export function handleRequest(request, handlers = HANDLERS) {
 export function serve({ stdin = process.stdin, stdout = process.stdout } = {}) {
   const rl = createInterface({ input: stdin, terminal: false });
   // Backpressure (review batch 5): when stdout's kernel buffer is full,
-  // write() returns false and the response must wait for 'drain' — or
-  // responses queue in memory unbounded. Writes are chained so responses
-  // stay IN ORDER: awaiting inline in the line handler would let the next
-  // line's response overtake a drained-but-delayed earlier one.
+  // Response writes are chained so responses stay IN ORDER: the next
+  // response is issued only after the previous write's COMPLETION CALLBACK
+  // runs. Links resolve on the callback, never on write()'s boolean return
+  // — on macOS, pipes are async and `true` does not mean flushed, so a
+  // link resolved on the return value would let direct-run process.exit(0)
+  // truncate buffered output. Write errors (EPIPE when the client closes
+  // the pipe) are delivered TO the callback, consumed there, and the chain
+  // continues with later responses; a destroyed stream settles its pending
+  // callbacks, so the chain cannot wedge.
   let tail = Promise.resolve();
+  let pending = 0; // admitted responses not yet fully written
+  const MAX_PENDING = 1000;
+  const writeResponse = (payload) =>
+    new Promise((resolve) => {
+      try {
+        stdout.write(JSON.stringify(payload) + '\n', () => {
+          pending--;
+          resolve();
+        });
+      } catch {
+        pending--; // synchronous write error: fail-soft, keep serving
+        resolve();
+      }
+    });
+  // Admission control: past MAX_PENDING the request is REFUSED, not
+  // retained — a hostile pipeliner (already violating the sequential
+  // -request convention MCP hosts follow) cannot grow server memory past
+  // the cap. The overload error is written inline; the stream's internal
+  // FIFO keeps it ordered behind previously issued writes. It is neither
+  // chained nor counted in `pending`.
+  const respond = (id, payload) => {
+    if (pending >= MAX_PENDING) {
+      try {
+        stdout.write(
+          JSON.stringify({
+            jsonrpc: '2.0',
+            id: id ?? null,
+            error: { code: -32000, message: `server overloaded: ${MAX_PENDING} responses queued, request dropped` }
+          }) + '\n',
+          () => {}
+        );
+      } catch {} // stream gone: nothing to deliver
+      return;
+    }
+    pending++;
+    tail = tail.then(() => writeResponse(payload));
+  };
   rl.on('line', (line) => {
     const trimmed = line.trim();
     if (!trimmed) return;
@@ -391,27 +433,31 @@ export function serve({ stdin = process.stdin, stdout = process.stdout } = {}) {
     try {
       request = JSON.parse(trimmed);
     } catch (error) {
-      tail = tail.then(() =>
-        writeLine(stdout, { jsonrpc: '2.0', id: null, error: { code: -32700, message: `parse error: ${error.message}` } })
-      );
+      respond(null, { jsonrpc: '2.0', id: null, error: { code: -32700, message: `parse error: ${error.message}` } });
       return;
     }
     const response = handleRequest(request);
-    if (response !== null) tail = tail.then(() => writeLine(stdout, response));
+    if (response === null) return;
+    respond(response.id, response);
+  });
+  // HandleRequest is synchronous, but responses queue in the chain while
+  // stdout applies backpressure — the direct-run exit path must await it.
+  rl.on('close', () => {
+    tail.catch(() => {}).then(() => rl.emit('drained'));
   });
   return rl;
-}
-
-function writeLine(stdout, obj) {
-  const ok = stdout.write(JSON.stringify(obj) + '\n');
-  if (!ok) return new Promise((resolve) => stdout.once('drain', resolve));
 }
 
 const isDirectRun =
   process.argv[1] && (process.argv[1].endsWith('server.js') || process.argv[1].endsWith('pocketpmo-mcp'));
 
 if (isDirectRun) {
-  serve();
-  // Keep the process alive on stdio; exit cleanly when stdin closes.
-  process.stdin.on('end', () => process.exit(0));
+  const rl = serve();
+  // Keep the process alive on stdio; exit only after every queued response
+  // has actually been written (process.exit here would truncate whatever is
+  // still waiting for drain — 10k pings into an unread pipe lost ~83% of
+  // responses before this await).
+  process.stdin.on('end', () => {
+    rl.on('drained', () => process.exit(0));
+  });
 }
