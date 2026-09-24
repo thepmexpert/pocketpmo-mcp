@@ -33,6 +33,17 @@ function withDir(dir, fn) {
   }
 }
 
+function withEnv(key, value, fn) {
+  const prev = process.env[key];
+  process.env[key] = value;
+  try {
+    fn();
+  } finally {
+    if (prev === undefined) delete process.env[key];
+    else process.env[key] = prev;
+  }
+}
+
 const good = JSON.stringify({
   id: 1,
   name: 'Alpha',
@@ -218,6 +229,7 @@ describe('review batch 5 hardening', () => {
   });
 
   test('symlinked .json files are skipped with a warning, not followed', () => {
+    if (process.platform === 'win32') return; // symlinkSync needs privileges on stock Windows
     const dir = makeTempDir({ 'alpha.json': good });
     const secret = path.join(os.tmpdir(), `pmo-mcp-secret-${process.pid}.json`);
     fs.writeFileSync(secret, JSON.stringify({ id: 'evil', name: 'Evil', root: 'hash' }));
@@ -398,6 +410,7 @@ describe('project repository: cache observability', () => {
     // Rule 36: never cache gate failures. A symlink that is later replaced
     // by a real file must be picked up on the next scan, so skips cannot
     // produce cached verdicts — pinned here via the skips counter.
+    if (process.platform === 'win32') return; // symlinkSync needs privileges on stock Windows
     const dir = makeTempDir({ 'alpha.json': good });
     const secret = path.join(os.tmpdir(), `pmo-mcp-secret-${process.pid}-2.json`);
     fs.writeFileSync(secret, '{"id":"evil","name":"Evil"}');
@@ -453,6 +466,19 @@ describe('project repository: refresh / invalidate / facade', () => {
     });
   });
 
+  test('invalidate() canonicalizes absolute paths with .. segments', () => {
+    const dir = makeTempDir({ 'alpha.json': good, 'beta.json': beta });
+    withDir(dir, () => {
+      refresh();
+      listProjects();
+      assert.equal(diagnostics().entries, 2);
+      // Raw '..' spelling — join() would normalize it away, so build the
+      // string directly. resolve() must map it onto the canonical key.
+      assert.equal(invalidate(dir + '/subdir/../beta.json'), true);
+      assert.equal(diagnostics().entries, 1, 'the equivalent canonical entry is gone');
+    });
+  });
+
   test('projectRepository facade exposes the finding-#2 architecture', () => {
     const dir = makeTempDir({ 'alpha.json': good });
     withDir(dir, () => {
@@ -474,6 +500,63 @@ describe('project repository: refresh / invalidate / facade', () => {
 });
 
 describe('project repository: directory churn', () => {
+  test('a file that transitions into a gate-skip state drops its stale cache entry', () => {
+    // cubic round 1: gates run BEFORE the cache lookup and evictCacheFor
+    // only removes vanished files — without a drop at the skip site, a
+    // parsed-then-symlinked file would keep its stale parse in memory and
+    // in diagnostics().entries until it disappeared entirely.
+    if (process.platform === 'win32') return; // symlinkSync needs privileges on stock Windows
+    const dir = makeTempDir({ 'alpha.json': good, 'beta.json': beta });
+    const secret = path.join(os.tmpdir(), `pmo-mcp-secret-${process.pid}-3.json`);
+    fs.writeFileSync(secret, '{"id":"evil","name":"Evil"}');
+    try {
+      withDir(dir, () => {
+        refresh();
+        listProjects();
+        assert.equal(diagnostics().entries, 2);
+        fs.rmSync(path.join(dir, 'beta.json'));
+        fs.symlinkSync(secret, path.join(dir, 'beta.json'));
+        const d0 = diagnostics();
+        const { projects, warnings } = listProjects();
+        const d1 = diagnostics();
+        assert.equal(projects.length, 1, 'symlinked beta is not listed');
+        assert.equal(warnings.length, 1);
+        assert.equal(d1.skips - d0.skips, 1);
+        assert.equal(d1.evictions - d0.evictions, 1, 'the stale parse is evicted at the skip site');
+        assert.equal(d1.entries, 1, 'diagnostics track only live cacheable files');
+      });
+    } finally {
+      fs.rmSync(secret, { force: true });
+    }
+  });
+
+  test('byte budget evicts oldest entries; listing stays correct', () => {
+    const dir = makeTempDir({
+      'a.json': good,
+      'b.json': beta,
+      'c.json': JSON.stringify({ id: 3, name: 'Gamma' })
+    });
+    withEnv('PMO_CACHE_MAX_BYTES', '1', () => {
+      withDir(dir, () => {
+        refresh();
+        const d0 = diagnostics();
+        const first = listProjects();
+        const d1 = diagnostics();
+        assert.equal(first.projects.length, 3, 'all projects listed regardless of cache state');
+        assert.equal(first.warnings.length, 0);
+        assert.ok(d1.evictions - d0.evictions >= 2, 'budget overflow evicted entries');
+        assert.ok(d1.entries <= 1, 'a 1-byte budget holds at most the newest entry');
+        // Next scan must re-parse the evicted files (budget still active).
+        const d2 = diagnostics();
+        const second = listProjects();
+        const d3 = diagnostics();
+        assert.equal(second.projects.length, 3);
+        assert.ok(d3.misses - d2.misses >= 2, 'evicted files re-parse on the next scan');
+        assert.ok(d3.hits - d2.hits >= 1, 'the newest entry survived');
+      });
+    });
+  });
+
   test('duplicate project names resolve deterministically (first by sorted filename)', () => {
     const dir = makeTempDir({
       'b.json': JSON.stringify({ id: 'B', name: 'Dup' }),
