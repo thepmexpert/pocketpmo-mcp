@@ -315,6 +315,40 @@ describe('getProject', () => {
     });
   });
 
+  // cubic P3 (PR #14 round 1): the skip context must be BOUNDED — a dir with
+  // many malformed files must not produce an unbounded error line. First 3
+  // basenames inline; the full list lives in list_projects.
+  test('no-match skip context is capped at 3 files with a +N pointer', () => {
+    const files = { 'beta.json': JSON.stringify({ id: 2, name: 'Beta', activities: [] }) };
+    for (let i = 1; i <= 5; i++) files[`c${i}.json`] = '{ torn';
+    const dir = makeTempDir(files);
+    withDir(dir, () => {
+      const { error } = getProject('ghost');
+      assert.ok(error.includes('Available: 2'));
+      for (const f of ['c1.json', 'c2.json', 'c3.json']) {
+        assert.ok(error.includes(`failed to parse ${f}`), `expected ${f} in: ${error}`);
+      }
+      for (const f of ['c4.json', 'c5.json']) {
+        assert.ok(!error.includes(f), `${f} must be capped out of: ${error}`);
+      }
+      assert.ok(error.includes('(+2 more'), `overflow pointer missing: ${error}`);
+      assert.ok(error.length < 600, `error line unbounded (${error.length} chars)`);
+    });
+  });
+
+  test('empty-dir branch caps its warning detail the same way', () => {
+    const files = {};
+    for (let i = 1; i <= 5; i++) files[`c${i}.json`] = '{ torn';
+    const dir = makeTempDir(files);
+    withDir(dir, () => {
+      const { error } = getProject('x');
+      assert.ok(error.startsWith('no project files in'));
+      assert.ok(error.includes('c1.json') && error.includes('c3.json'));
+      assert.ok(!error.includes('c4.json'), `4th file must be capped out: ${error}`);
+      assert.ok(error.includes('(+2 more'), `overflow pointer missing: ${error}`);
+    });
+  });
+
   test('all-invalid-files error keeps parse warnings when NO valid project exists', () => {
     const dir = makeTempDir({ 'corrupt.json': '{ not valid json' });
     withDir(dir, () => {
