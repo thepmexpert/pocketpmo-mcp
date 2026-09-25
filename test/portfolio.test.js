@@ -58,6 +58,34 @@ describe('portfolioRollup (lib)', () => {
     assert.equal(row.pert.expected, 31); // (62+124)/6 = 31 exactly
   });
 
+  test('pert.activityCount counts only ANALYZABLE activities (sums match counts)', () => {
+    // cubic round 2: excluded activities must not inflate the aggregate
+    // count — the count describes the inputs of the sums.
+    const rmix = portfolioRollup(
+      [{ id: 'pm', name: 'mixed', activities: [{ id: 'm1', duration: 6 }, { id: 'm2' }] }],
+      {}
+    );
+    assert.equal(rmix.pert.projectCount, 1);
+    assert.equal(rmix.pert.activityCount, 1);
+    assert.deepEqual(rmix.pert.skippedActivities, [{ project: 'pm', ids: ['m2'] }]);
+  });
+
+  test('name-only projects stay identifiable in skip reports', () => {
+    // cubic round 2: a project without an id must not collapse to null in
+    // skip reports — fall back to its name. Needs a second, analyzable
+    // project so the pert aggregate (and its skip report) exists at all.
+    const r = portfolioRollup(
+      [
+        { id: 'p1', name: 'valid-one', activities: [{ id: 'v1', duration: 6 }] },
+        { name: 'gamma-only', activities: [] }
+      ],
+      {}
+    );
+    assert.deepEqual(r.pert.skippedProjects, [
+      { project: 'gamma-only', reason: 'no activities' }
+    ]);
+  });
+
   test('project with no activities: pert null + reason, never silent', () => {
     const row = r.projects.find((p) => p.id === 'pc');
     assert.equal(row.pert, null);
@@ -201,12 +229,50 @@ describe('portfolio_rollup (tool)', () => {
     assert.equal(text.includes(dir), false);
   });
 
-  test('statusDate passes through to per-project EVM (deterministic pin)', () => {
+  test('statusDate passes through to per-project EVM (exact-value pin)', () => {
+    // Vacuity fix (cubic round 2): byte-identical invocations pin nothing.
+    // Pin the CONTRACT: exact EVM value at a given statusDate, and a
+    // different statusDate provably changes it.
+    // alpha: budget 1000, 2026-01-01 -> 2026-01-11, statusDate 01-06
+    // => elapsed 5/10 => PV = 500. At endDate (01-11) => PV = 1000.
     const dir = makeTempDir({ 'alpha.json': JSON.stringify(projA) });
-    const a = withDir(dir, () => payloadOf(call(4, 'portfolio_rollup', { statusDate: '2026-01-06' })));
-    const b = withDir(dir, () => payloadOf(call(5, 'portfolio_rollup', { statusDate: '2026-01-06' })));
-    assert.equal(JSON.stringify(a), JSON.stringify(b));
-    assert.equal(a.evm.plannedValue > 0, true, 'PV must be positive mid-schedule');
+    const mid = withDir(dir, () => payloadOf(call(4, 'portfolio_rollup', { statusDate: '2026-01-06' })));
+    assert.equal(mid.evm.plannedValue, 500);
+    const end = withDir(dir, () => payloadOf(call(9, 'portfolio_rollup', { statusDate: '2026-01-11' })));
+    assert.equal(end.evm.plannedValue, 1000);
+  });
+
+  test('raw hostile id never reaches the payload rows (display-safe boundary)', () => {
+    // {"toString":null} is valid JSON, truthy (passes the loader's
+    // id-or-name gate), and String() on it THROWS (#48). Row ids are
+    // display data — they must render as strings, never leak objects.
+    const hostile = { id: { toString: null }, name: 'hostile-id', activities: [{ id: 'h1', duration: 5 }] };
+    const dir = makeTempDir({ 'hostile.json': JSON.stringify(hostile) });
+    const payload = withDir(dir, () => payloadOf(call(10, 'portfolio_rollup', {})));
+    const row = payload.projects.find((p) => p.name === 'hostile-id');
+    assert.ok(row, 'hostile project row missing');
+    assert.equal(typeof row.id, 'string', `row.id must render, not leak: ${JSON.stringify(row.id)}`);
+    assert.equal(typeof row.name, 'string');
+  });
+
+  test('every-malformed dir: error names the skipped files, bounded, neutral label', () => {
+    // cubic round 2: 'no project files' alone hides WHY. Carry a capped,
+    // neutrally-labeled summary (rule: cap + pointer + neutral label).
+    const dir = makeTempDir({
+      'a.json': '{nope',
+      'b.json': '{nope',
+      'c.json': '{nope',
+      'd.json': '{nope',
+      'e.json': '{nope'
+    });
+    const result = withDir(dir, () => call(11, 'portfolio_rollup', {}));
+    assert.equal(result.result.isError, true);
+    const text = result.result.content[0].text;
+    assert.match(text, /no project files/);
+    assert.match(text, /files skipped \(invalid or unreadable\)/);
+    assert.match(text, /a\.json, b\.json, c\.json/);
+    assert.match(text, /\+2 more; full list via list_projects/);
+    assert.equal(text.includes(dir), false);
   });
 
   test('file-identity loading: a project NAMED like another project id cannot steal its row', () => {
@@ -261,13 +327,6 @@ describe('portfolio_rollup (tool)', () => {
     assert.equal(row.pert, null);
     assert.match(row.pertSkipReason, /valid PERT/);
     assert.equal(r2p.pert, null, 'no analyzable pert data -> null aggregate');
-    // Mixed: one valid + one invalid stays analyzed, invalid id reported.
-    const rmix = portfolioRollup(
-      [{ id: 'pm', name: 'mixed', activities: [{ id: 'm1', duration: 6 }, { id: 'm2' }] }],
-      {}
-    );
-    assert.equal(rmix.pert.projectCount, 1);
-    assert.deepEqual(rmix.pert.skippedActivities, [{ project: 'pm', ids: ['m2'] }]);
   });
 
   test('assumptions array is a copy — mutating a response cannot poison later ones', () => {

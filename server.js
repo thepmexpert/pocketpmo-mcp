@@ -25,7 +25,7 @@ import {
   validPertOrdering,
   round2
 } from './lib/calculators.js';
-import { portfolioRollup } from './lib/portfolio.js';
+import { createPortfolioFold } from './lib/portfolio.js';
 import { loadAllProjects, listProjects, getProject, projectsDir } from './lib/projects.js';
 
 const SERVER_INFO = { name: 'pocketpmo-mcp', version: '0.1.0' };
@@ -389,43 +389,28 @@ const HANDLERS = {
   },
 
   portfolio_rollup(args) {
-    // ONE scan, file-identity loads (cubic P1/P2 + CodeRabbit on this PR):
-    // getProject's id-OR-name matching could resolve a listed entry to the
-    // WRONG project (a project named like another's id), and per-entry
-    // getProject lookups would rescan the directory once per project
-    // (quadratic syscalls on a synchronous stdio server). loadAllProjects
-    // yields each project parsed from its OWN file in a single pass.
-    const { projects: entries, warnings } = loadAllProjects();
-    const notReadable = warnings.find(
-      (w) => typeof w === 'string' && w.includes('not readable')
-    );
-    if (notReadable) {
-      // An unreadable directory is NOT an empty one — pass the lib's own
-      // generic diagnostic through instead of misreporting it.
-      throw new DomainError(notReadable);
-    }
-    if (!entries.length) {
-      // Same generic message shape as getProject's empty-dir error — the
-      // configured dir path stays server-side. Dir-level parse warnings
-      // stay visible below and via list_projects.
-      throw new DomainError('no project files in the configured projects directory');
-    }
-    const loaded = [];
+    // STREAMING + ONE scan (round-1/2 bot findings): rows fold one project
+    // at a time via loadAllProjects — parsed bodies are never retained
+    // (forEachEntry hands out the cache's own evictable objects; collecting
+    // them re-peaks memory past the caps), there is no id-or-name
+    // re-resolution (a project NAMED like another's id could steal its
+    // row), and no per-project rescans (quadratic syscalls).
+    const fold = createPortfolioFold({ statusDate: args.statusDate ?? undefined });
+    const seen = new Set();
     const loadSkipped = [];
-    const seenIds = new Set();
-    for (const { file, project } of entries) {
-      // Display-safe id label (#13 class): a hostile id must not leak
-      // objects into the payload or throw at the boundary — unconvertible
-      // ids fall back to their file basename.
+    const { count, skippedFiles, warnings, fatal } = loadAllProjects((project, file) => {
+      // Display-safe dedupe label (#13/#48 class): a hostile id must not
+      // leak objects or throw at the boundary — unconvertible ids fall
+      // back to name, then to the file basename.
       let label;
       try {
-        label = project.id ?? file;
+        label = project.id ?? project.name ?? file;
         if (typeof label !== 'string' && typeof label !== 'number') label = file;
         label = String(label);
       } catch {
         label = file;
       }
-      if (seenIds.has(label)) {
+      if (seen.has(label)) {
         // Duplicate ids across files: first occurrence analyzed, later ones
         // reported — first-match-wins must not double-count a project.
         loadSkipped.push({
@@ -433,17 +418,29 @@ const HANDLERS = {
           file,
           reason: 'duplicate id; first occurrence analyzed'
         });
-        continue;
+        return;
       }
-      seenIds.add(label);
-      loaded.push(project);
-    }
-    const rollup = portfolioRollup(loaded, {
-      statusDate: args.statusDate ?? undefined
+      seen.add(label);
+      fold.add(project);
     });
+    if (fatal) {
+      // An unreadable directory is NOT an empty one — pass the lib's own
+      // generic diagnostic through instead of misreporting it.
+      throw new DomainError(fatal);
+    }
+    if (!count) {
+      // Generic prefix (pin-stable) + bounded, neutrally-labeled WHY:
+      // cap at 3, overflow points at list_projects, paths stay server-side.
+      const shown = skippedFiles.slice(0, 3).join(', ');
+      const rest = skippedFiles.length - 3;
+      const detail = skippedFiles.length
+        ? `; files skipped (invalid or unreadable): ${shown}${rest > 0 ? ` (+${rest} more; full list via list_projects)` : ''}`
+        : '';
+      throw new DomainError(`no project files in the configured projects directory${detail}`);
+    }
     return {
-      ...rollup,
-      projectCount: entries.length,
+      ...fold.result(),
+      projectCount: count,
       warnings,
       loadSkipped,
       read_only: true
