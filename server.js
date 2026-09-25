@@ -398,21 +398,28 @@ const HANDLERS = {
     const fold = createPortfolioFold({ statusDate: args.statusDate ?? undefined });
     const seen = new Set();
     const loadSkipped = [];
-    const { count, skippedFiles, warnings, fatal } = loadAllProjects((project, file) => {
-      // Identity key = id, falling back to the (unique) file basename —
-      // NEVER the name (cubic round 3): the loader deliberately accepts
-      // distinct files sharing a name, and name-based dedupe dropped them
-      // with a false "duplicate id" reason. Display label stays id ?? file;
-      // a hostile id falls back to the file via the catch (#48).
+    const { count, skippedFiles, failedFiles, warnings, fatal } = loadAllProjects((project, file) => {
+      // Identity key = TAGGED id/file namespace, never the name (cubic
+      // round 3 + CR round 4): untagged `project.id ?? file` let a project
+      // with id 'y.json' collide with the name-only project in file
+      // y.json. Distinct key namespaces keep them distinct; the loader
+      // deliberately accepts distinct files that share a name.
+      let key;
       let label;
       try {
-        label = project.id ?? file;
-        if (typeof label !== 'string' && typeof label !== 'number') label = file;
-        label = String(label);
+        if (project.id !== null && project.id !== undefined) {
+          const rendered = String(project.id);
+          key = `id:${rendered}`;
+          label = typeof project.id === 'string' || typeof project.id === 'number' ? rendered : file;
+        } else {
+          key = `file:${file}`;
+          label = file;
+        }
       } catch {
+        key = `file:${file}`;
         label = file;
       }
-      if (seen.has(label)) {
+      if (seen.has(key)) {
         // Duplicate ids across files: first occurrence analyzed, later ones
         // reported — first-match-wins must not double-count a project.
         loadSkipped.push({
@@ -422,7 +429,7 @@ const HANDLERS = {
         });
         return;
       }
-      seen.add(label);
+      seen.add(key);
       fold.add(project);
     });
     if (fatal) {
@@ -431,14 +438,25 @@ const HANDLERS = {
       throw new DomainError(fatal);
     }
     if (!count) {
-      // Generic prefix (pin-stable) + bounded, neutrally-labeled WHY:
-      // cap at 3, overflow points at list_projects, paths stay server-side.
-      const shown = skippedFiles.slice(0, 3).join(', ');
-      const rest = skippedFiles.length - 3;
-      const detail = skippedFiles.length
-        ? `; files skipped (invalid or unreadable): ${shown}${rest > 0 ? ` (+${rest} more; full list via list_projects)` : ''}`
-        : '';
-      throw new DomainError(`no project files in the configured projects directory${detail}`);
+      // Generic prefix (pin-stable) + bounded, accurately-labeled WHY:
+      // cap at 3 per class, overflow points at list_projects, paths stay
+      // server-side. Parse failures and internal analysis failures get
+      // separate, accurate labels (cubic round 4).
+      const cap = (files) => {
+        const shown = files.slice(0, 3).join(', ');
+        const rest = files.length - 3;
+        return `${shown}${rest > 0 ? ` (+${rest} more; full list via list_projects)` : ''}`;
+      };
+      const parts = [];
+      if (skippedFiles.length) {
+        parts.push(`files skipped (invalid or unreadable): ${cap(skippedFiles)}`);
+      }
+      if (failedFiles.length) {
+        parts.push(`files not analyzed (internal error): ${cap(failedFiles)}`);
+      }
+      throw new DomainError(
+        `no project files in the configured projects directory${parts.length ? `; ${parts.join('; ')}` : ''}`
+      );
     }
     return {
       ...fold.result(),

@@ -156,16 +156,27 @@ describe('portfolioRollup (lib)', () => {
     // cubic round 3: result() exposed the internal rows array; a caller
     // mutating one response changed every later result of the same fold.
     const fold = createPortfolioFold({});
-    fold.add({ id: 'p1', name: 'one', activities: [{ id: 'a1', duration: 4 }] });
+    // One valid + one invalid activity: pert.skippedActivities then holds
+    // an entry whose ids array ALIASES the internal row's skipped array.
+    fold.add({
+      id: 'p1',
+      name: 'one',
+      activities: [{ id: 'a1', duration: 4 }, { id: { toString: null } }]
+    });
     const r1 = fold.result();
     r1.projects.push({ junk: true });
     r1.projects[0].dependencyWarnings = 99;
     r1.pert.totalExpected = -1;
+    // CR round 4: skippedActivities ids alias the internal row arrays.
+    r1.pert.skippedActivities[0].ids.push('junk');
     const r2 = fold.result();
     assert.equal(r2.projects.length, 1);
     assert.equal(r2.projects[0].dependencyWarnings, 0);
     // (o + 4m + p)/6 = (2.8 + 16 + 6)/6 = 24.8/6 = 4.1333 -> 4.13
     assert.equal(r2.pert.totalExpected, 4.13);
+    assert.deepEqual(r2.pert.skippedActivities, [
+      { project: 'p1', ids: ['[unprintable]'] }
+    ]);
   });
 
   test('assumptions are stated in the payload, not just docs', () => {
@@ -342,11 +353,30 @@ describe('portfolio_rollup (tool)', () => {
     assert.equal(outcome.fatal, null, 'callback failure is not a directory fatal');
     assert.equal(outcome.count, 0);
     assert.equal(calls, 1, 'called exactly once — no retry storm');
-    assert.deepEqual(outcome.skippedFiles, ['ok.json']);
+    // cubic round 4: callback failures are their OWN class — the file
+    // parsed fine, so it must not land in skippedFiles ("invalid or
+    // unreadable") but in failedFiles.
+    assert.deepEqual(outcome.skippedFiles, []);
+    assert.deepEqual(outcome.failedFiles, ['ok.json']);
     assert.ok(
       outcome.warnings.some((w) => typeof w === 'string' && /ok\.json/.test(w)),
       `failure must be reported per file: ${JSON.stringify(outcome.warnings)}`
     );
+  });
+
+  test('an id that equals another file basename does not collide in dedupe (tagged keys)', () => {
+    // CR round 4: label = project.id ?? file mixes two key namespaces —
+    // a project with id 'y.json' collides with the name-only project in
+    // file y.json. Tagged keys (id:... / file:...) keep them distinct.
+    const a = { id: 'y.json', name: 'id-looks-like-a-filename', activities: [{ id: 'a1', duration: 6 }] };
+    const b = { name: 'innocent-bystander', activities: [{ id: 'b1', duration: 60 }] };
+    const dir = makeTempDir({ 'x.json': JSON.stringify(a), 'y.json': JSON.stringify(b) });
+    const payload = withDir(dir, () => payloadOf(call(13, 'portfolio_rollup', {})));
+    assert.equal(payload.projectCount, 2);
+    assert.equal(payload.pert.projectCount, 2);
+    assert.equal(payload.loadSkipped.length, 0);
+    const rowB = payload.projects.find((p) => p.name === 'innocent-bystander');
+    assert.ok(rowB, 'the y.json project must not be swallowed');
   });
 
   test('file-identity loading: a project NAMED like another project id cannot steal its row', () => {
