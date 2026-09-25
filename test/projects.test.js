@@ -368,6 +368,9 @@ describe('getProject', () => {
     withDir(dir, () => {
       const { error } = getProject('x');
       assert.ok(error.startsWith('no project files in'));
+      // §4.3: the absolute configured path must NOT leak in-band (whole-
+      // payload assertion — same discipline as the batch-5 leak closure).
+      assert.ok(!error.includes(dir), `abs path leaked in-band: ${error}`);
       assert.ok(error.includes('c1.json') && error.includes('c3.json'));
       assert.ok(!error.includes('c4.json'), `4th file must be capped out: ${error}`);
       assert.ok(error.includes('(+2 more'), `overflow pointer missing: ${error}`);

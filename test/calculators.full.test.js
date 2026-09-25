@@ -1160,3 +1160,41 @@ test('#31 EVM: DST boundary via offset timestamps keeps sub-day precision', () =
   });
   assert.ok(Math.abs(r.timeline.actualTimePercentage - 0.5) < 1e-9, `got ${r.timeline.actualTimePercentage}`);
 });
+
+// ---------------------------------------------------------------------------
+// External review batch (§3.1, §6.2)
+// ---------------------------------------------------------------------------
+
+// §3.1 coverage: a self-dependency is a 1-node cycle and must be reported
+// with the loop path, like any other cycle (pins existing behavior).
+test('review §3.1 coverage: self-dependency is a cycle, reported with the loop path', () => {
+  const issues = validateActivities([
+    { id: 's1', duration: 2, predecessors: ['s1'] },
+    { id: 's2', duration: 3, predecessors: [] },
+  ]);
+  const cyc = issues.find(
+    (i) => i.field === 'predecessors' && /cycle/.test(i.message) && i.activityId === 's1'
+  );
+  assert.ok(cyc, `self-loop must be reported as a cycle: ${JSON.stringify(issues)}`);
+  assert.ok(cyc.message.includes('s1 -> s1'), `loop path missing: ${cyc?.message}`);
+});
+
+// §6.2: a normal distribution with a NEGATIVE mean is invalid input for a
+// schedule duration, not a low estimate — the sampler truncates at zero, so
+// it silently flooded the network with zero-duration activities (pre-fix,
+// verified: mean=0 with ZERO issues). Same repair-and-report contract as
+// negative stdDev (test #30): repair to the duration-derived default + issue.
+test('review §6.2: negative normal mean is repaired to the duration default and reported', () => {
+  const r = runMonteCarlo({
+    activities: [
+      { id: 'a', duration: 3, distribution: { type: 'normal', mean: -5, stdDev: 2 } },
+    ],
+    iterations: 500,
+    rng: makeRng(42),
+  });
+  assert.ok(
+    (r.issues ?? []).some((i) => i.activityId === 'a' && /negative mean/.test(i.message)),
+    `negative-mean issue must be reported, got: ${JSON.stringify(r.issues ?? null)}`
+  );
+  assert.ok(r.mean > 2, `sampled mean must track the duration default (3), got ${r.mean}`);
+});
