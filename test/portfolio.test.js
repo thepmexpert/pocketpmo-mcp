@@ -115,6 +115,29 @@ describe('portfolioRollup (lib)', () => {
     assert.equal(r0.evm, null);
   });
 
+  test('one as-of date per fold — the default resolves ONCE at fold creation', (t) => {
+    // cubic round 5: the statusDate default used to be evaluated per
+    // project (inside evmMetrics), so a scan crossing UTC midnight mixed
+    // as-of dates within one portfolio. Mock the clock: fold created
+    // 2026-01-15T23:59Z, project added after midnight — its EVM must use
+    // the fold's date (PV ≈ 466.67), not the new day's (500).
+    t.mock.timers.enable({ apis: ['Date'] });
+    t.mock.timers.setTime(new Date('2026-01-15T23:59:59Z').getTime());
+    const fold = createPortfolioFold({});
+    t.mock.timers.setTime(new Date('2026-01-16T00:30:00Z').getTime());
+    fold.add({
+      id: 'pdate',
+      name: 'straddler',
+      startDate: '2026-01-01',
+      endDate: '2026-01-31',
+      budget: 1000,
+      activities: [{ id: 's1', duration: 5 }]
+    });
+    const r = fold.result();
+    // 14 of 30 days elapsed at the fold's as-of -> 1000 * 14/30
+    assert.equal(r.projects[0].evm.plannedValue, r2(1000 * (14 / 30)));
+  });
+
   test('declared-but-unsupported dependencies are counted per project row', () => {
     const rDep = portfolioRollup(
       [

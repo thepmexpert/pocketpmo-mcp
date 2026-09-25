@@ -429,8 +429,13 @@ const HANDLERS = {
         });
         return;
       }
-      seen.add(key);
+      // Reserve the key only AFTER a successful add (CR + cubic round 5,
+      // converged): if fold.add throws, loadAllProjects records the file in
+      // failedFiles — and a LATER valid file with the same id must still be
+      // analyzed instead of being skipped as a duplicate of a project that
+      // was never analyzed.
       fold.add(project);
+      seen.add(key);
     });
     if (fatal) {
       // An unreadable directory is NOT an empty one — pass the lib's own
