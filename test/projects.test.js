@@ -168,10 +168,16 @@ describe('getProject', () => {
       // matches. (The || fallback itself is not distinguishable here —
       // for these fixtures the id match and the name fallback resolve to
       // the same string by definition; the semantics live in lib.)
-      assert.equal(getProject('e').project.id, 'e');
-      assert.equal(getProject('z').project.id, 'z');
+      const byEmpty = getProject('e');
+      assert.equal(byEmpty.error, null);
+      assert.equal(byEmpty.project.id, 'e');
+      const byZero = getProject('z');
+      assert.equal(byZero.error, null);
+      assert.equal(byZero.project.id, 'z');
       // an object name stringifies without throwing
-      assert.equal(getProject('[object object]').project.id, 'o');
+      const byObj = getProject('[object object]');
+      assert.equal(byObj.error, null);
+      assert.equal(byObj.project.id, 'o');
       const miss = getProject('missing');
       assert.equal(miss.project, null);
       assert.ok(miss.error.includes('no project matching'));
@@ -232,7 +238,9 @@ describe('getProject', () => {
       assert.equal(lookup.project.id, '[unprintable]');
       // the hostile project's real NAME is still matchable — only its
       // unconvertible ID field is inert
-      assert.equal(getProject('hostile').project.name, 'Hostile');
+      const byHostName = getProject('hostile');
+      assert.equal(byHostName.error, null);
+      assert.equal(byHostName.project.name, 'Hostile');
       const miss = getProject('nope');
       assert.ok(miss.error.includes('[unprintable]'));
     });
