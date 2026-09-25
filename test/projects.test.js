@@ -319,6 +319,27 @@ describe('getProject', () => {
     });
   });
 
+  // #13 class sweep completion (found during the #14 rebase onto 82cb55d):
+  // the REQUESTED name is untrusted too at the lib boundary — a
+  // no-primitive object ({"toString":null} is valid JSON) must render as
+  // the display placeholder and match nothing, never throw inside the
+  // scan. matchKey/displayString split: failed conversions are inert for
+  // matching, rendered for display.
+  test('non-convertible requested name renders as placeholder, never throws', () => {
+    const dir = makeTempDir({
+      'beta.json': JSON.stringify({ id: 2, name: 'Beta', activities: [] })
+    });
+    withDir(dir, () => {
+      const { project, error } = getProject({ toString: null });
+      assert.equal(project, null);
+      assert.ok(
+        error.includes("no project matching '[unprintable]'"),
+        `expected placeholder rendering, got: ${error}`
+      );
+      assert.ok(error.includes('Available: 2'), 'available ids still listed');
+    });
+  });
+
   // cubic P3 (PR #14 round 1): the skip context must be BOUNDED — a dir with
   // many malformed files must not produce an unbounded error line. First 3
   // basenames inline; the full list lives in list_projects.
