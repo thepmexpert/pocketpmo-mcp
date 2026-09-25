@@ -1,4 +1,4 @@
-import { test, describe } from 'node:test';
+import { test, describe, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -16,11 +16,30 @@ import {
 
 function makeTempDir(files) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pmo-mcp-test-'));
+  // Register BEFORE writing files: a throwing writeFileSync must not leak
+  // the freshly created dir (cubic round 1 on #13).
+  createdDirs.push(dir);
   for (const [name, content] of Object.entries(files)) {
     fs.writeFileSync(path.join(dir, name), content);
   }
   return dir;
 }
+
+// Every makeTempDir dir is removed after the file's tests finish (cubic
+// round 3 on #12: ~10 dirs used to leak per run). Tests that call
+// fs.mkdtemp directly clean up in their own try/finally instead.
+const createdDirs = [];
+after(() => {
+  for (const dir of createdDirs) {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true });
+    } catch {
+      // One stubborn dir (EPERM/EBUSY on lock-holding platforms) must not
+      // abort the loop or fail the hook — the other dirs still get cleaned
+      // and the suite stays green (cubic round 6 on #13).
+    }
+  }
+});
 
 function withDir(dir, fn) {
   const prev = process.env.PMO_PROJECTS_DIR;
@@ -114,6 +133,126 @@ describe('getProject', () => {
       const { error } = getProject('nope');
       assert.ok(error.includes('no project matching'));
       assert.ok(error.includes('1'));
+    });
+  });
+
+  // Regression (cubic round 3 on #12, defect pre-existing since v0.1):
+  // non-string `name` crashed lookups dir-wide. Root cause + fix live in
+  // lib/projects.js (getProject name coercion) — see the pointer there.
+  test('non-string name values cannot break lookups (numeric name)', () => {
+    const dir = makeTempDir({
+      'a.json': JSON.stringify({ id: 7, name: 404 }),
+      'b.json': good
+    });
+    withDir(dir, () => {
+      // listProjects always tolerated it; since the CR-round-5 metadata
+      // change, names render as strings ('404'), matching getProject
+      const { projects } = listProjects();
+      assert.equal(projects.length, 2);
+      assert.equal(projects[0].name, '404');
+      assert.ok(projects.every((p) => typeof p.name === 'string'));
+      // name lookup of the VALID sibling must not be poisoned by a.json
+      const byName = getProject('alpha');
+      assert.equal(byName.error, null);
+      assert.equal(byName.project.id, 1);
+      // the numeric name is matched by its stringified value
+      const numeric = getProject('404');
+      assert.equal(numeric.error, null);
+      assert.equal(numeric.project.id, 7);
+      // and the error path survives: it iterates ALL candidates
+      const miss = getProject('nope');
+      assert.equal(miss.project, null);
+      assert.ok(miss.error.includes("no project matching 'nope'"));
+      assert.ok(miss.error.includes('7'), 'available ids still listed');
+    });
+  });
+
+  test('falsy and object name values do not break lookups either', () => {
+    const dir = makeTempDir({
+      'empty-name.json': JSON.stringify({ id: 'e', name: '' }),
+      'zero-name.json': JSON.stringify({ id: 'z', name: 0 }),
+      'obj-name.json': JSON.stringify({ id: 'o', name: { nested: true } })
+    });
+    withDir(dir, () => {
+      // What this pins: falsy names crash nothing and create no false
+      // matches. (The || fallback itself is not distinguishable here —
+      // for these fixtures the id match and the name fallback resolve to
+      // the same string by definition; the semantics live in lib.)
+      const byEmpty = getProject('e');
+      assert.equal(byEmpty.error, null);
+      assert.equal(byEmpty.project.id, 'e');
+      const byZero = getProject('z');
+      assert.equal(byZero.error, null);
+      assert.equal(byZero.project.id, 'z');
+      // an object name stringifies without throwing
+      const byObj = getProject('[object object]');
+      assert.equal(byObj.error, null);
+      assert.equal(byObj.project.id, 'o');
+      const miss = getProject('missing');
+      assert.equal(miss.project, null);
+      assert.ok(miss.error.includes('no project matching'));
+    });
+  });
+
+  // CodeRabbit round 1 on #13: String() itself throws on objects with no
+  // primitive conversion — {"toString":null} is valid JSON. Both fields
+  // (id AND name) are guarded via safeString; the sibling sites in
+  // listProjects metadata are covered too (rule: fix the class, not the
+  // quoted line).
+  test('unconvertible field values degrade to placeholders, never crashes', () => {
+    const dir = makeTempDir({
+      'hostile-id.json': JSON.stringify({ id: { toString: null }, name: 'Hostile' }),
+      'hostile-name.json': JSON.stringify({ id: 7, name: { toString: null } }),
+      'b.json': good
+    });
+    withDir(dir, () => {
+      // full listing survives both hostile files
+      const { projects } = listProjects();
+      assert.equal(projects.length, 3);
+      // a valid sibling is unaffected
+      assert.equal(getProject('alpha').project.id, 1);
+      // the hostile-name project still matches by id; its name simply
+      // cannot match anything
+      const byId = getProject(7);
+      assert.equal(byId.error, null);
+      assert.equal(byId.project.id, 7);
+      // and the error path iterates every candidate without throwing
+      const miss = getProject('nope');
+      assert.equal(miss.project, null);
+      assert.ok(miss.error.includes('no project matching'));
+      assert.ok(miss.error.includes('[unprintable]'), 'unconvertible ids get a stable placeholder');
+    });
+  });
+
+  // CR + cubic round 2 on #13: the [unprintable] placeholder leaked into
+  // the MATCH namespace — getProject('[unprintable]') would hand over the
+  // first project whose conversion failed, and an agent copying that id
+  // from the Available list would silently receive an arbitrary hostile
+  // project. Placeholders are display-only; matching skips them. A project
+  // whose REAL id is literally '[unprintable]' still matches (it is just
+  // an id).
+  test('the [unprintable] placeholder is display-only, never a match target', () => {
+    const dir = makeTempDir({
+      'hostile-id.json': JSON.stringify({ id: { toString: null }, name: 'Hostile' }),
+      'literal.json': JSON.stringify({ id: '[unprintable]', name: 'Literal' }),
+      'b.json': good
+    });
+    withDir(dir, () => {
+      const { projects } = listProjects();
+      assert.equal(projects.length, 3);
+      // the placeholder lookup resolves ONLY the literal-id project —
+      // never a project whose conversion failed
+      const lookup = getProject('[unprintable]');
+      assert.equal(lookup.error, null);
+      assert.equal(lookup.project.name, 'Literal');
+      assert.equal(lookup.project.id, '[unprintable]');
+      // the hostile project's real NAME is still matchable — only its
+      // unconvertible ID field is inert
+      const byHostName = getProject('hostile');
+      assert.equal(byHostName.error, null);
+      assert.equal(byHostName.project.name, 'Hostile');
+      const miss = getProject('nope');
+      assert.ok(miss.error.includes('[unprintable]'));
     });
   });
 
