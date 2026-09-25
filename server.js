@@ -580,6 +580,11 @@ export function serve({ stdin = process.stdin, stdout = process.stdout } = {}) {
   // minutes of work with no bound).
   const inflight = new Map();
   const entryFor = (id) => (id !== undefined && id !== null ? inflight.get(id) : null);
+  let anonSeq = 0;
+  // Tracked async dispatch promises: the shutdown drain must wait for them,
+  // or a direct-run exit truncates every in-flight monte carlo result (bot
+  // sweep round 1, cubic P1 — same failure class as the batch-5 exit bug).
+  const asyncSettlers = new Set();
 
   rl.on('line', (line) => {
     const trimmed = line.trim();
@@ -620,6 +625,13 @@ export function serve({ stdin = process.stdin, stdout = process.stdout } = {}) {
     // §2.2: concurrency cap — a monte_carlo call beyond the cap gets a
     // PREDICTABLE in-band rejection instead of silently queueing minutes
     // of work behind the runs already live.
+    // Non-object guard FIRST (bot sweep round 1, both reviewers): a valid
+    // JSON `null` parsed cleanly and crashed the dereference below before
+    // handleRequest's own invalid-request check could answer it.
+    if (!request || typeof request !== 'object') {
+      respond(null, { jsonrpc: '2.0', id: null, error: { code: -32600, message: 'invalid request: expected an object' } });
+      return;
+    }
     const isMonteCarlo =
       request.method === 'tools/call' &&
       request.params?.name === 'monte_carlo';
@@ -639,8 +651,17 @@ export function serve({ stdin = process.stdin, stdout = process.stdout } = {}) {
     // write chain as responses (an inline stdout.write would overtake
     // earlier responses — batch-6 round-sweep lesson) and are DROPPED
     // under admission pressure: they are expendable, responses are not.
+    // Id-less (notification-style) monte_carlo calls get a synthetic key:
+    // they must yield AND count toward the cap like any other run, or a
+    // client sidesteps §2.2 entirely with "id": null (bot sweep round 1,
+    // cubic P2).
     let context = null;
-    if (isMonteCarlo && request.id !== undefined && request.id !== null) {
+    let inflightKey = null;
+    if (isMonteCarlo) {
+      inflightKey =
+        request.id !== undefined && request.id !== null
+          ? request.id
+          : `#anon-${++anonSeq}`;
       const controller = new AbortController();
       const progressToken = request.params?._meta?.progressToken;
       context = {
@@ -658,26 +679,25 @@ export function serve({ stdin = process.stdin, stdout = process.stdout } = {}) {
           );
         }
       };
-      inflight.set(request.id, { controller, settled: false });
+      inflight.set(inflightKey, { controller, settled: false });
     }
+    const releaseInflight = () => {
+      if (inflightKey !== null && inflight.has(inflightKey)) {
+        const entry = inflight.get(inflightKey);
+        entry.settled = true;
+        inflight.delete(inflightKey);
+      }
+    };
     const response = handleRequest(request, HANDLERS, context);
     if (response && typeof response.then === 'function') {
       const rid = request.id;
-      response.then(
+      const tracked = response.then(
         (res) => {
-          const entry = entryFor(rid);
-          if (entry) {
-            entry.settled = true;
-            inflight.delete(rid);
-          }
+          releaseInflight();
           respond(rid, res);
         },
         (error) => {
-          const entry = entryFor(rid);
-          if (entry) {
-            entry.settled = true;
-            inflight.delete(rid);
-          }
+          releaseInflight();
           // MCP cancellation contract: the receiver SHOULD NOT send a
           // response for a cancelled request — the client asked to stop.
           if (error instanceof MonteCarloCancelledError) return;
@@ -689,8 +709,20 @@ export function serve({ stdin = process.stdin, stdout = process.stdout } = {}) {
           });
         }
       );
+      // Remove-after-settle keeps the set bounded on a long-lived server;
+      // the allSettled snapshot at close time only needs UNSETTLED entries.
+      const trackedFinal = tracked.finally(() => {
+        asyncSettlers.delete(trackedFinal);
+      });
+      asyncSettlers.add(trackedFinal);
       return;
     }
+    // Sync-settled tracked requests (e.g. monte_carlo on a missing project
+    // throws a DomainError that handleRequest converts in-band) MUST
+    // release their slot here — otherwise two bad calls exhaust the
+    // concurrency cap for the server's lifetime (bot sweep round 1, both
+    // reviewers).
+    releaseInflight();
     if (response === null) return;
     respond(response.id, response);
   });
@@ -703,7 +735,16 @@ export function serve({ stdin = process.stdin, stdout = process.stdout } = {}) {
   let inputClosed = false;
   rl.on('close', () => {
     inputClosed = true;
-    tail.catch(() => {}).then(() => rl.emit('drained'));
+    // Async monte carlo dispatches settle AFTER the sync tail has drained:
+    // the exit path must wait for those settlers, then for the responses
+    // they enqueue, or a direct-run exit truncates every in-flight result
+    // (bot sweep round 1, cubic P1 — same failure class as the batch-5
+    // exit-truncation bug this await originally fixed).
+    tail
+      .catch(() => {})
+      .then(() => Promise.allSettled([...asyncSettlers]))
+      .then(() => tail.catch(() => {}))
+      .then(() => rl.emit('drained'));
   });
   return rl;
 }

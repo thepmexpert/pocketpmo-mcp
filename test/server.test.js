@@ -718,6 +718,10 @@ test('review §2.2: monte carlo beyond PMO_MAX_CONCURRENT is rejected in-band', 
   const parsed = written.map((c) => JSON.parse(c));
   const byId = Object.fromEntries(parsed.filter((p) => p.id != null).map((p) => [p.id, p]));
   assert.ok(byId[30] && byId[31], 'first two runs must be admitted');
+  // Non-vacuity (cubic round 1): isError responses are ALSO written to
+  // stdout — existence alone passes even if admission broke entirely.
+  assert.equal(byId[30].result.isError, false, 'run 30 must actually succeed');
+  assert.equal(byId[31].result.isError, false, 'run 31 must actually succeed');
   assert.ok(byId[32].result.isError, 'third run must be rejected');
   assert.match(byId[32].result.content[0].text, /server busy/);
   assert.match(byId[32].result.content[0].text, /PMO_MAX_CONCURRENT/);
@@ -759,4 +763,99 @@ test('review §2.2: PMO_MAX_ITERATIONS dynamically clamps the requested count', 
   } finally {
     delete process.env.PMO_MAX_ITERATIONS;
   }
+});
+
+// ---------------------------------------------------------------------------
+// Bot sweep round 1 (PR #18 reviews)
+// ---------------------------------------------------------------------------
+
+// cubic P1: a valid JSON `null` parsed cleanly and crashed the monte carlo
+// dispatch dereference BEFORE handleRequest's own invalid-request check —
+// fail-soft means -32600 and keep serving.
+test('bot sweep r1: JSON null request -> -32600, server keeps serving', async () => {
+  const written = [];
+  const fakeStdout = { write(c, cb) { written.push(c); cb(); return true; }, on() {} };
+  const { serve } = await import('../server.js');
+  const { PassThrough } = await import('node:stream');
+  const stdin = new PassThrough();
+  const rl = serve({ stdin, stdout: fakeStdout });
+  stdin.write('null\n');
+  stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 50, method: 'ping' }) + '\n');
+  stdin.end();
+  await new Promise((resolve) => stdin.on('end', resolve));
+  for (let i = 0; i < 10; i++) await new Promise((resolve) => setImmediate(resolve));
+  const parsed = written.map((c) => JSON.parse(c));
+  assert.equal(parsed[0].error.code, -32600, 'null request must get -32600');
+  assert.equal(parsed[1].id, 50, 'server must keep serving after the null request');
+  void rl;
+});
+
+// cubic P1 (both reviewers): sync-settled monte carlo failures (unknown
+// project -> in-band DomainError response) never reached the promise
+// cleanup, so two bad calls permanently exhausted PMO_MAX_CONCURRENT and
+// every later monte carlo got "server busy".
+test('bot sweep r1: failed monte carlo calls release their concurrency slot', async () => {
+  const written = [];
+  const fakeStdout = { write(c, cb) { written.push(c); cb(); return true; }, on() {} };
+  const { serve } = await import('../server.js');
+  const { PassThrough } = await import('node:stream');
+  const stdin = new PassThrough();
+  serve({ stdin, stdout: fakeStdout });
+  stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 40, method: 'tools/call', params: { name: 'monte_carlo', arguments: { project: 'ghost', iterations: 100 } } }) + '\n');
+  stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 41, method: 'tools/call', params: { name: 'monte_carlo', arguments: { project: 'ghost', iterations: 100 } } }) + '\n');
+  stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 42, method: 'tools/call', params: { name: 'monte_carlo', arguments: { project: '101', iterations: 50 } } }) + '\n');
+  stdin.end();
+  await new Promise((resolve) => stdin.on('end', resolve));
+  for (let i = 0; i < 50; i++) await new Promise((resolve) => setImmediate(resolve));
+  const parsed = written.map((c) => JSON.parse(c));
+  const byId = Object.fromEntries(parsed.filter((p) => p.id != null).map((p) => [p.id, p]));
+  assert.equal(byId[40].result.isError, true, 'unknown project fails in-band');
+  assert.equal(byId[41].result.isError, true, 'second unknown project fails in-band');
+  assert.equal(byId[42].result.isError, false, 'slots must be released — a valid run after two failures must not be busy-rejected');
+});
+
+// cubic P1: `drained` fired when the SYNC tail drained, before async monte
+// carlo dispatches settled — a direct-run exit truncated every in-flight
+// result. Drain order is the discriminator: the response must be written
+// BEFORE drained fires.
+test('bot sweep r1: drained waits for in-flight async monte carlo responses', async () => {
+  const written = [];
+  const fakeStdout = { write(c, cb) { written.push(c); cb(); return true; }, on() {} };
+  const { serve } = await import('../server.js');
+  const { PassThrough } = await import('node:stream');
+  const stdin = new PassThrough();
+  const rl = serve({ stdin, stdout: fakeStdout });
+  let drainedAt = -1;
+  rl.on('drained', () => {
+    drainedAt = written.length;
+  });
+  stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 60, method: 'tools/call', params: { name: 'monte_carlo', arguments: { project: '101', iterations: 50 } } }) + '\n');
+  stdin.end();
+  await new Promise((resolve) => stdin.on('end', resolve));
+  for (let i = 0; i < 50; i++) await new Promise((resolve) => setImmediate(resolve));
+  const respIdx = written.findIndex((c) => c.includes('"id":60'));
+  assert.ok(respIdx >= 0, 'async monte carlo response must be written');
+  assert.ok(drainedAt > respIdx, `drained fired at written[${drainedAt}] before the response at written[${respIdx}] — exit would truncate it`);
+});
+
+// cubic P2: id-less (notification-style) monte carlo calls bypassed both
+// the yield/cancel context and the concurrency cap — "id": null sidestepped
+// §2.2 entirely.
+test('bot sweep r1: id-less monte carlo counts toward the concurrency cap', async () => {
+  const written = [];
+  const fakeStdout = { write(c, cb) { written.push(c); cb(); return true; }, on() {} };
+  const { serve } = await import('../server.js');
+  const { PassThrough } = await import('node:stream');
+  const stdin = new PassThrough();
+  serve({ stdin, stdout: fakeStdout });
+  stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'tools/call', params: { name: 'monte_carlo', arguments: { project: '101', iterations: 100 } } }) + '\n');
+  stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'tools/call', params: { name: 'monte_carlo', arguments: { project: '101', iterations: 100 } } }) + '\n');
+  stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 33, method: 'tools/call', params: { name: 'monte_carlo', arguments: { project: '101', iterations: 50 } } }) + '\n');
+  stdin.end();
+  await new Promise((resolve) => stdin.on('end', resolve));
+  for (let i = 0; i < 50; i++) await new Promise((resolve) => setImmediate(resolve));
+  const parsed = written.map((c) => JSON.parse(c));
+  const byId = Object.fromEntries(parsed.filter((p) => p.id != null).map((p) => [p.id, p]));
+  assert.ok(byId[33].result.isError, 'third run must be busy-rejected — id-less runs hold slots too');
+  assert.match(byId[33].result.content[0].text, /server busy/);
 });

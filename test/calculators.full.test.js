@@ -1218,7 +1218,10 @@ test('review §2.3: cpmNetworkFast is byte-identical to cpmNetwork on random DAG
   let dagCount = 0;
   // Predecessor edges point strictly backward => acyclic by construction.
   // Durations include 0 (tie ordering in the backward sort), fractions and
-  // NaN (invalid -> coerced to 0 by the shared validity rule).
+  // NaN (invalid -> coerced to 0 by the shared validity rule). rand(4)
+  // allows ZERO parents => the corpus also contains disconnected
+  // components (cubic round 1: the old 1+rand(3) floor made that claim
+  // false).
   for (let t = 0; t < 40; t++) {
     const n = 2 + rand(25);
     const acts = Array.from({ length: n }, (_, i) => ({
@@ -1227,7 +1230,7 @@ test('review §2.3: cpmNetworkFast is byte-identical to cpmNetwork on random DAG
       predecessors: [],
     }));
     for (let j = 1; j < n; j++) {
-      const parents = 1 + rand(3);
+      const parents = rand(4);
       for (let k = 0; k < parents; k++) {
         const p = rand(j); // strictly earlier node => acyclic
         if (!acts[j].predecessors.includes(`n${p}`)) acts[j].predecessors.push(`n${p}`);
@@ -1315,8 +1318,48 @@ test('review §2.2: runMonteCarloAsync honours AbortSignal cancellation', async 
   assert.ok(seen.length > 0, 'progress must have been reported before cancellation');
   const [lastProgress, lastTotal] = seen[seen.length - 1];
   assert.equal(lastTotal, 5000);
-  assert.equal(lastProgress, 100, 'cancellation must land at the deterministic abort point');
+  // Progress is 1-based (completed iterations); progressEvery = 5000/100 =
+  // 50, so reports land at 1, 51, 101 — the first >= 100 is 101.
+  assert.equal(lastProgress, 101, 'cancellation must land at the deterministic abort point');
   for (let i = 1; i < seen.length; i++) {
     assert.ok(seen[i][0] > seen[i - 1][0], 'progress must be monotone');
   }
+});
+
+// Bot sweep round 1 (cubic P1 + CodeRabbit convergence): reused fast-path
+// states must never leak stale ls across iterations. The fixture needs a
+// SAMPLED zero on the successor — a degenerate normal (mean 0, stdDev 0)
+// returns 0 every iteration, so ef(pred) === ef(succ) every iteration, the
+// stable byEfDesc sort processes pred FIRST, and cpmNetwork's fresh clone
+// reads succ.ls as undefined -> the maxEF fallback. With reused states,
+// succ's STALE ls from iteration N-1 replaced that fallback and corrupted
+// pred's float from iteration 2 onward (verified pre-fix: pred share < 1).
+test('bot sweep r1: fast-path state reuse never leaks stale ls into criticality', () => {
+  const acts = [
+    { id: 'pred', duration: 3, predecessors: [] },
+    {
+      id: 'succ',
+      duration: 3,
+      // Sampled duration is EXACTLY 0 every iteration (degenerate).
+      distribution: { type: 'normal', mean: 0, stdDev: 0 },
+      predecessors: ['pred'],
+    },
+  ];
+  const r = runMonteCarlo({ activities: acts, iterations: 200, rng: makeRng(42) });
+  const pred = r.criticalActivityFrequency.find((e) => e.id === 'pred');
+  assert.ok(pred, 'pred must appear in criticality shares');
+  assert.equal(pred.share, 1, `pred is critical every iteration under fresh semantics, got share ${pred?.share}`);
+});
+
+// Bot sweep round 1 (cubic P2): a degenerate yieldEvery (0, NaN, negative)
+// would disable every event-loop yield (i % 0 is NaN) — normalize, don't
+// crash or starve. Results stay identical to the sync engine.
+test('bot sweep r1: invalid yieldEvery is normalized, results still match sync', async () => {
+  const acts = [
+    { id: 'x', duration: 2, predecessors: [] },
+    { id: 'y', duration: 3, predecessors: ['x'] },
+  ];
+  const sync = runMonteCarlo({ activities: acts, iterations: 120, rng: makeRng(9) });
+  const async = await runMonteCarloAsync({ activities: acts, iterations: 120, rng: makeRng(9), yieldEvery: 0 });
+  assert.equal(JSON.stringify(sync), JSON.stringify(async), 'degenerate yieldEvery must not change results');
 });
