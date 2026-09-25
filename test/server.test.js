@@ -474,3 +474,114 @@ describe('review batch 5 hardening', () => {
     assert.equal(consoleError2.mock.callCount(), 0, 'EPIPE is expected and must not spam stderr');
   });
 });
+
+// ---------------------------------------------------------------------------
+// External review batch (§1.3, §4.1, §4.2, §8.2)
+// ---------------------------------------------------------------------------
+
+// §1.3: MCP tool annotations — hosts read these instead of scraping responses.
+test('review §1.3: tools expose read-only annotations', () => {
+  const r = handleRequest(req(74, 'tools/list'));
+  for (const t of r.result.tools) {
+    assert.equal(t.annotations?.readOnlyHint, true, `${t.name} must be annotated read-only`);
+    assert.equal(t.annotations?.destructiveHint, false, `${t.name} must not be destructive`);
+    assert.equal(t.annotations?.idempotentHint, true, `${t.name} is a deterministic read`);
+    assert.equal(t.annotations?.openWorldHint, false, `${t.name} touches only the projects dir`);
+  }
+});
+
+// §4.1: non-string project args are rejected with a field+type error BEFORE
+// any lookup — the old coercion turned {x:1} into a "[object Object]" lookup
+// (inert, but sloppy: a project literally named "[object Object]" could match).
+test('review §4.1: non-string project arg -> field+type error, no coercion', () => {
+  for (const bad of [{ x: 1 }, 42, null, ['a']]) {
+    const r = handleRequest(req(70, 'tools/call', { name: 'get_project', arguments: { project: bad } }));
+    assert.equal(r.result.isError, true, `project ${JSON.stringify(bad)} must be rejected`);
+    assert.match(
+      r.result.content[0].text,
+      /^invalid parameter 'project': expected a string, received /
+    );
+  }
+});
+
+// §8.2: unexpected internal errors are sanitized in-band (error.message can
+// carry paths/library internals); full detail goes to stderr — the MCP log
+// channel. Expected domain errors keep their operator-facing messages.
+test('review §8.2: internal errors are sanitized in-band, detail to stderr', () => {
+  const origError = console.error;
+  const logged = [];
+  console.error = (...a) => logged.push(a.join(' '));
+  try {
+    const r = handleRequest(req(71, 'tools/call', { name: 'boom', arguments: {} }), {
+      boom() {
+        throw new Error('ECONNREFUSED /tmp/secret/path');
+      },
+    });
+    assert.equal(r.result.isError, true);
+    assert.ok(!r.result.content[0].text.includes('secret'), 'internals must not leak in-band');
+    assert.match(r.result.content[0].text, /internal tool error/);
+    assert.ok(
+      logged.some((l) => l.includes('/tmp/secret/path')),
+      'full detail must reach stderr for the operator'
+    );
+  } finally {
+    console.error = origError;
+  }
+  // Domain errors still pass through verbatim (project-not-found UX, #14).
+  const miss = handleRequest(req(72, 'tools/call', { name: 'get_project', arguments: { project: 'nope' } }));
+  assert.equal(miss.result.isError, true);
+  assert.match(miss.result.content[0].text, /no project matching 'nope'/);
+});
+
+// §4.2: targets are clamped like iterations — an unbounded array would
+// otherwise inflate both compute and response size from one argument.
+test('review §4.2: targets are clamped to MAX_TARGETS', () => {
+  const targets = Array.from({ length: 150 }, (_, i) => i + 1);
+  const r = handleRequest(req(73, 'tools/call', {
+    name: 'monte_carlo',
+    arguments: { project: '101', iterations: 50, targets },
+  }));
+  const payload = JSON.parse(r.result.content[0].text);
+  assert.equal(payload.probabilityByTarget.length, 100, 'first 100 targets only');
+});
+
+// §4.2: an oversized input line is rejected BEFORE JSON.parse with a
+// predictable protocol error (id null — the line is deliberately not
+// parsed), and the process keeps serving. The limit is read dynamically so
+// the test drives it via env instead of shipping a multi-MB fixture.
+test('review §4.2: oversized line -> -32600 id null, server keeps serving', async () => {
+  const written = [];
+  const fakeStdout = {
+    write(chunk, cb) {
+      written.push(chunk);
+      cb();
+      return true;
+    },
+    on() {},
+  };
+  const { serve } = await import('../server.js');
+  const { PassThrough } = await import('node:stream');
+  const stdin = new PassThrough();
+  const rl = serve({ stdin, stdout: fakeStdout });
+  let drained = 0;
+  rl.on('drained', () => {
+    drained++;
+  });
+  process.env.PMO_MAX_MESSAGE_BYTES = '64';
+  try {
+    stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping', note: 'x'.repeat(100) }) + '\n');
+    stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'ping' }) + '\n');
+    stdin.end();
+    await new Promise((resolve) => stdin.on('end', resolve));
+    for (let i = 0; i < 5; i++) await new Promise((resolve) => setImmediate(resolve));
+  } finally {
+    delete process.env.PMO_MAX_MESSAGE_BYTES;
+  }
+  assert.equal(drained, 1, 'chain must settle cleanly after the rejection');
+  assert.equal(written.length, 2);
+  const first = JSON.parse(written[0]);
+  assert.equal(first.error.code, -32600);
+  assert.equal(first.id, null, 'oversized line is not parsed, so id is null');
+  assert.match(first.error.message, /PMO_MAX_MESSAGE_BYTES/);
+  assert.equal(JSON.parse(written[1]).id, 2, 'server must keep serving after the rejection');
+});

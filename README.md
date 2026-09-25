@@ -103,6 +103,33 @@ project-manager, program-manager) inherit by copying the same
 Launch the server from a pack context by pointing `PMO_PROJECTS_DIR` at the
 organisation's project export directory.
 
+## Error policy and limits
+
+Two distinct error channels, per the MCP convention:
+
+- **JSON-RPC protocol errors** (`-32600`/`-32601`/`-32602`/`-32700`): malformed
+  JSON, unknown method, invalid params shape, oversized input lines.
+- **Tool-level error results** (`isError: true` inside a successful
+  `tools/call` response): unknown tool, project not found, empty projects
+  directory, malformed project data, domain validation failures. Expected
+  domain errors carry operator-facing messages; unexpected internal errors are
+  logged to stderr with full detail and reported in-band as a generic
+  "internal tool error" so internals never leak to clients.
+
+Absolute filesystem paths never appear in tool responses — the configured
+projects directory is logged to stderr only.
+
+Input limits (env-tunable, read per request):
+
+| Limit | Default | Effect |
+|---|---|---|
+| `PMO_MAX_MESSAGE_BYTES` | 1048576 | Lines above the cap are rejected with `-32600` before `JSON.parse`; the server keeps serving. |
+| `PMO_MAX_TARGETS` | 100 | `monte_carlo` uses only the first 100 targets. |
+| `MAX_ITERATIONS` | 20000 | `monte_carlo` iteration clamp (not env-tunable; exported for tests). |
+
+The pipeline cap (`MAX_PENDING` = 1000 admitted responses) and the per-file
+read gates (symlink/regular-file/size) are documented in the source.
+
 ## Architecture
 
 ```
@@ -111,7 +138,7 @@ lib/calculators.js  PERT · CPM · Monte Carlo · EVM (pure, documented ports)
 lib/projects.js     JSON export-file store (tolerant loader)
 data/               sample project fixture
 demo/demo.mjs       real-subprocess E2E demo → markdown transcript
-test/               168 tests (node:test, zero deps; run on Node ≥ 20)
+test/               184 tests (node:test, zero deps; run on Node ≥ 20)
 ```
 
 ## Roadmap

@@ -30,6 +30,20 @@ const PROTOCOL_VERSION = '2025-06-18';
 // the server clamps agent-supplied iteration counts here BEFORE the lib sees
 // them (garbage gets the default workload, not the maximum).
 export const MAX_ITERATIONS = 20000;
+// §4.2: targets are clamped like iterations — an unbounded array would
+// otherwise inflate both compute and response size from a single argument.
+export const MAX_TARGETS = 100;
+
+// §1.3: MCP tool annotations. All tools are pure reads over the projects
+// directory (deterministic: monte_carlo is seeded by default), so every
+// tool carries the same read-only/idempotent hints — hosts read these
+// instead of scraping `read_only` out of every response payload.
+const READ_ONLY_ANNOTATIONS = {
+  readOnlyHint: true,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: false
+};
 
 // ---------------------------------------------------------------------------
 // Tool surface
@@ -40,11 +54,13 @@ const TOOLS = [
     name: 'list_projects',
     description:
       'List PocketPMO projects available to the server (from export files).',
+    annotations: READ_ONLY_ANNOTATIONS,
     inputSchema: { type: 'object', properties: {} }
   },
   {
     name: 'get_project',
     description: 'Get a project summary: schedule, budget, and data-shape counts.',
+    annotations: READ_ONLY_ANNOTATIONS,
     inputSchema: {
       type: 'object',
       properties: { project: { type: 'string', description: 'Project id or name' } },
@@ -55,6 +71,7 @@ const TOOLS = [
     name: 'pert_estimate',
     description:
       'PERT three-point estimates per activity plus roll-up and completion probability against an optional target duration (days). ASSUMPTION: the variance roll-up assumes activity durations are independent — correlated durations (shared resources, common risks) make the true project variance larger, so treat the roll-up and completion probability as optimistic in that case.',
+    annotations: READ_ONLY_ANNOTATIONS,
     inputSchema: {
       type: 'object',
       properties: {
@@ -68,6 +85,7 @@ const TOOLS = [
     name: 'critical_path',
     description:
       'CPM analysis: early/late start-finish, float, critical activities, project duration.',
+    annotations: READ_ONLY_ANNOTATIONS,
     inputSchema: {
       type: 'object',
       properties: { project: { type: 'string' } },
@@ -77,7 +95,8 @@ const TOOLS = [
   {
     name: 'monte_carlo',
     description:
-      'Monte Carlo schedule simulation: duration percentiles, mean, stdDev, probability of finishing by target dates, critical-path frequency. Deterministic (seeded).',
+      'Monte Carlo schedule simulation: duration percentiles, mean, stdDev, probability of finishing by target dates, and criticality — criticalActivityFrequency is the per-activity probability of sitting on the critical path in a simulation run (criticalPathFrequency is a deprecated alias with the same per-activity shares; whole-path frequencies are not reported because simulated path identity is unstable). Deterministic (seeded). Targets beyond the first 100 are ignored.',
+    annotations: READ_ONLY_ANNOTATIONS,
     inputSchema: {
       type: 'object',
       properties: {
@@ -96,7 +115,8 @@ const TOOLS = [
   {
     name: 'evm_metrics',
     description:
-      'Earned value metrics: PV, EV, AC, CPI, SPI, EAC, VAC and timeline percentage.',
+      'Earned value metrics: PV, EV, AC, CPI, SPI, EAC, VAC and timeline percentage. SEMANTICS: AC is DERIVED (milestone cost x progress under the PocketPMO export model), not ledger-recorded spend; costData.expenses are not incorporated.',
+    annotations: READ_ONLY_ANNOTATIONS,
     inputSchema: {
       type: 'object',
       properties: {
@@ -110,6 +130,7 @@ const TOOLS = [
     name: 'risk_register',
     description:
       'Project risks scored by probability x impact, ranked highest first.',
+    annotations: READ_ONLY_ANNOTATIONS,
     inputSchema: {
       type: 'object',
       properties: { project: { type: 'string' } },
@@ -122,9 +143,26 @@ const TOOLS = [
 // Handlers
 // ---------------------------------------------------------------------------
 
+// §8.2: expected domain failures (project not found, empty projects dir,
+// no activities) throw this marker so the dispatch catch-all can pass their
+// SAFE, operator-facing messages through verbatim. Anything ELSE reaching
+// the catch-all is an internal bug whose message may carry filesystem paths
+// or library internals — that gets logged to stderr (the MCP log channel)
+// and a generic message in-band.
+class DomainError extends Error {}
+
 function loadOrFail(idOrName) {
+  // §4.1: reject non-string project args with a field+type error BEFORE any
+  // lookup. The old coercion turned {x:1} into a "[object Object]" lookup —
+  // inert, but a project literally named "[object Object]" could match, and
+  // the error named neither the field nor the expected type.
+  if (typeof idOrName !== 'string') {
+    throw new DomainError(
+      `invalid parameter 'project': expected a string, received ${idOrName === null ? 'null' : typeof idOrName}`
+    );
+  }
   const { project, error } = getProject(idOrName);
-  if (error) throw new Error(error);
+  if (error) throw new DomainError(error);
   return project;
 }
 
@@ -161,7 +199,7 @@ const HANDLERS = {
     const p = loadOrFail(args.project);
     const acts = Array.isArray(p.activities) ? p.activities : [];
     const issues = [];
-    if (!acts.length) throw new Error(`project '${args.project}' has no activities`);
+    if (!acts.length) throw new DomainError(`project '${args.project}' has no activities`);
     const detailed = acts.map((a) => {
       const o = a.distribution?.optimistic ?? (a.duration ?? NaN) * 0.7;
       const m = a.distribution?.mostLikely ?? a.duration ?? NaN;
@@ -229,7 +267,7 @@ const HANDLERS = {
   critical_path(args) {
     const p = loadOrFail(args.project);
     const acts = Array.isArray(p.activities) ? p.activities : [];
-    if (!acts.length) throw new Error(`project '${args.project}' has no activities`);
+    if (!acts.length) throw new DomainError(`project '${args.project}' has no activities`);
     const issues = validateActivities(acts);
     const net = cpmNetwork(structuredClone(acts));
     return {
@@ -244,7 +282,7 @@ const HANDLERS = {
   monte_carlo(args) {
     const p = loadOrFail(args.project);
     const acts = Array.isArray(p.activities) ? p.activities : [];
-    if (!acts.length) throw new Error(`project '${args.project}' has no activities`);
+    if (!acts.length) throw new DomainError(`project '${args.project}' has no activities`);
     // Coerce → default, floor fractional, clamp to [1, MAX_ITERATIONS].
     // runMonteCarlo throws on non-integers, so floor before it sees the value.
     // Default (2000) only for non-finite input — a floored finite value like
@@ -264,7 +302,9 @@ const HANDLERS = {
       activities: structuredClone(acts),
       iterations,
       rng: makeRng(seed),
-      targets: Array.isArray(args.targets) ? args.targets : []
+      // §4.2: clamped like iterations (documented in the tool description —
+      // "first 100 used"); items are still coerced/reported downstream.
+      targets: Array.isArray(args.targets) ? args.targets.slice(0, MAX_TARGETS) : []
     });
     return { project: p.name, ...result, read_only: true };
   },
@@ -308,7 +348,10 @@ const HANDLERS = {
 // ---------------------------------------------------------------------------
 
 function textResult(payload) {
-  return { content: [{ type: 'text', text: JSON.stringify(payload, null, 2) }], isError: false };
+  // §4.2: machine-readable payloads ship COMPACT — pretty-printing was
+  // pure response bloat for JSON consumers (every MCP client parses this
+  // text as JSON; indentation helps no one).
+  return { content: [{ type: 'text', text: JSON.stringify(payload) }], isError: false };
 }
 
 function errorResult(message) {
@@ -370,7 +413,15 @@ export function handleRequest(request, handlers = HANDLERS) {
     try {
       return { jsonrpc: '2.0', id, result: textResult(handler(args)) };
     } catch (error) {
-      return { jsonrpc: '2.0', id, result: errorResult(error.message) };
+      // §8.2: expected domain errors keep their safe operator-facing
+      // messages; anything else is an internal bug — full detail to stderr
+      // (the MCP log channel, never the protocol channel), generic message
+      // in-band so paths/internals cannot leak to clients.
+      if (error instanceof DomainError) {
+        return { jsonrpc: '2.0', id, result: errorResult(error.message) };
+      }
+      console.error(`pocketpmo-mcp: internal error in tool '${params.name}':`, error);
+      return { jsonrpc: '2.0', id, result: errorResult('internal tool error; see server logs') };
     }
   }
   return { jsonrpc: '2.0', id, error: { code: -32601, message: `method not found: ${method}` } };
@@ -444,9 +495,30 @@ export function serve({ stdin = process.stdin, stdout = process.stdout } = {}) {
     pending++;
     tail = tail.then(() => writeResponse(payload));
   };
+  // §4.2: input-line cap, read dynamically (env-tunable per use — the same
+  // discipline as the cache caps). readline has already buffered the line
+  // by the time this fires, but the cap keeps parse + dispatch from EVER
+  // seeing oversized input: the expensive part (JSON.parse of an arbitrary
+  // blob) is what gets refused.
+  const DEFAULT_MAX_MESSAGE_BYTES = 1024 * 1024;
+  const maxMessageBytes = () => {
+    const raw = Number(process.env.PMO_MAX_MESSAGE_BYTES);
+    return Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : DEFAULT_MAX_MESSAGE_BYTES;
+  };
   rl.on('line', (line) => {
     const trimmed = line.trim();
     if (!trimmed) return;
+    const limit = maxMessageBytes();
+    if (Buffer.byteLength(trimmed) > limit) {
+      // id null: the line is deliberately not parsed, so the request id is
+      // unknowable (JSON-RPC allows id null for undetectable ids).
+      respond(null, {
+        jsonrpc: '2.0',
+        id: null,
+        error: { code: -32600, message: `invalid request: line exceeds ${limit} bytes (PMO_MAX_MESSAGE_BYTES)` }
+      });
+      return;
+    }
     let request;
     try {
       request = JSON.parse(trimmed);
