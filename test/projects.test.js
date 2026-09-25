@@ -280,6 +280,150 @@ describe('getProject', () => {
     });
   });
 
+  // Regression (finding #3 residual, no-match diagnostics): when the REQUESTED
+  // project's own file is the malformed one, the no-match error must say so —
+  // a bare "no project matching" hides the fact that a file failed to load
+  // (e.g. a partial/temp file in a shared export dir). Warnings collected by
+  // the scan are basename-sanitized already; they must never leak the dir.
+  test('no-match error surfaces unreadable-file context when the requested file is malformed', () => {
+    const dir = makeTempDir({
+      'alpha.json': '{ torn',
+      'beta.json': JSON.stringify({ id: 2, name: 'Beta', activities: [] })
+    });
+    withDir(dir, () => {
+      const result = getProject('alpha');
+      assert.equal(result.project, null);
+      assert.ok(result.error.includes("no project matching 'alpha'"));
+      assert.ok(result.error.includes('Available: 2'), 'available ids still listed');
+      assert.ok(
+        result.error.includes('failed to parse alpha.json'),
+        `unreadable context missing from: ${result.error}`
+      );
+      assert.ok(
+        result.error.includes('files skipped (invalid or unreadable)'),
+        `neutral label missing from: ${result.error}`
+      );
+      // Whole-payload leak rule (batch 5): the dir string appears nowhere.
+      assert.ok(!JSON.stringify(result).includes(dir), 'dir leaked into result');
+    });
+  });
+
+  test('clean no-match error is unchanged when nothing is unreadable', () => {
+    const dir = makeTempDir({
+      'beta.json': JSON.stringify({ id: 2, name: 'Beta', activities: [] })
+    });
+    withDir(dir, () => {
+      const { project, error } = getProject('ghost');
+      assert.equal(project, null);
+      assert.equal(error, "no project matching 'ghost'. Available: 2");
+    });
+  });
+
+  // #13 class sweep completion (found during the #14 rebase onto 82cb55d):
+  // the REQUESTED name is untrusted too at the lib boundary — a
+  // no-primitive object ({"toString":null} is valid JSON) must render as
+  // the display placeholder and match nothing, never throw inside the
+  // scan. matchKey/displayString split: failed conversions are inert for
+  // matching, rendered for display.
+  test('non-convertible requested name renders as placeholder, never throws', () => {
+    const dir = makeTempDir({
+      'beta.json': JSON.stringify({ id: 2, name: 'Beta', activities: [] })
+    });
+    withDir(dir, () => {
+      const { project, error } = getProject({ toString: null });
+      assert.equal(project, null);
+      assert.ok(
+        error.includes("no project matching '[unprintable]'"),
+        `expected placeholder rendering, got: ${error}`
+      );
+      assert.ok(error.includes('Available: 2'), 'available ids still listed');
+    });
+  });
+
+  // cubic P3 (PR #14 round 1): the skip context must be BOUNDED — a dir with
+  // many malformed files must not produce an unbounded error line. First 3
+  // basenames inline; the full list lives in list_projects.
+  test('no-match skip context is capped at 3 files with a +N pointer', () => {
+    const files = { 'beta.json': JSON.stringify({ id: 2, name: 'Beta', activities: [] }) };
+    for (let i = 1; i <= 5; i++) files[`c${i}.json`] = '{ torn';
+    const dir = makeTempDir(files);
+    withDir(dir, () => {
+      const { error } = getProject('ghost');
+      assert.ok(error.includes('Available: 2'));
+      for (const f of ['c1.json', 'c2.json', 'c3.json']) {
+        assert.ok(error.includes(`failed to parse ${f}`), `expected ${f} in: ${error}`);
+      }
+      for (const f of ['c4.json', 'c5.json']) {
+        assert.ok(!error.includes(f), `${f} must be capped out of: ${error}`);
+      }
+      assert.ok(error.includes('(+2 more'), `overflow pointer missing: ${error}`);
+      assert.ok(error.length < 600, `error line unbounded (${error.length} chars)`);
+    });
+  });
+
+  test('empty-dir branch caps its warning detail the same way', () => {
+    const files = {};
+    for (let i = 1; i <= 5; i++) files[`c${i}.json`] = '{ torn';
+    const dir = makeTempDir(files);
+    withDir(dir, () => {
+      const { error } = getProject('x');
+      assert.ok(error.startsWith('no project files in'));
+      assert.ok(error.includes('c1.json') && error.includes('c3.json'));
+      assert.ok(!error.includes('c4.json'), `4th file must be capped out: ${error}`);
+      assert.ok(error.includes('(+2 more'), `overflow pointer missing: ${error}`);
+    });
+  });
+
+  // CodeRabbit round 2 (PR #14): the requested file's own warning gets a
+  // RESERVED SLOT — hoisted to the front of the capped list when its basename
+  // matches '<key>.json', even when it sorts beyond the first three.
+  test('requested file warning is hoisted past the cap (no-match branch)', () => {
+    const files = { 'beta.json': JSON.stringify({ id: 2, name: 'Beta', activities: [] }) };
+    for (let i = 1; i <= 4; i++) files[`c${i}.json`] = '{ torn';
+    files['zeta.json'] = '{ torn';
+    const dir = makeTempDir(files);
+    withDir(dir, () => {
+      const { error } = getProject('zeta');
+      assert.ok(error.includes("no project matching 'zeta'"));
+      assert.ok(
+        error.includes('failed to parse zeta.json'),
+        `requested file warning must be hoisted past the cap: ${error}`
+      );
+      assert.ok(error.includes('c1.json'), 'first sorted warning still shown');
+      for (const f of ['c3.json', 'c4.json']) {
+        assert.ok(!error.includes(f), `${f} must be capped out: ${error}`);
+      }
+      assert.ok(error.includes('(+2 more'), `overflow pointer missing: ${error}`);
+    });
+  });
+
+  test('empty-dir branch hoists the requested file warning too', () => {
+    const files = {};
+    for (let i = 1; i <= 4; i++) files[`c${i}.json`] = '{ torn';
+    files['zeta.json'] = '{ torn';
+    const dir = makeTempDir(files);
+    withDir(dir, () => {
+      const { error } = getProject('zeta');
+      assert.ok(error.startsWith('no project files in'));
+      assert.ok(error.includes('failed to parse zeta.json'), `hoist missing: ${error}`);
+      assert.ok(!error.includes('c3.json'), `c3 must be capped out: ${error}`);
+    });
+  });
+
+  // cubic round 2 (PR #14): shape-invalid files (parsed OK, wrong shape) are
+  // NOT "unreadable" — the label stays neutral across all skip reasons.
+  test('shape-invalid skips carry the neutral label too', () => {
+    const dir = makeTempDir({
+      'beta.json': JSON.stringify({ id: 2, name: 'Beta', activities: [] }),
+      'weird.json': 'null'
+    });
+    withDir(dir, () => {
+      const { error } = getProject('ghost');
+      assert.ok(error.includes('files skipped (invalid or unreadable)'));
+      assert.ok(error.includes('not a JSON object: weird.json'), `got: ${error}`);
+    });
+  });
+
   test('all-invalid-files error keeps parse warnings when NO valid project exists', () => {
     const dir = makeTempDir({ 'corrupt.json': '{ not valid json' });
     withDir(dir, () => {
