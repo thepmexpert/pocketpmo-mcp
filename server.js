@@ -21,9 +21,11 @@ import {
   evmMetrics,
   validateActivities,
   validDuration,
+  effectivePertTriple,
   validPertOrdering,
   round2
 } from './lib/calculators.js';
+import { portfolioRollup } from './lib/portfolio.js';
 import { listProjects, getProject, projectsDir } from './lib/projects.js';
 
 const SERVER_INFO = { name: 'pocketpmo-mcp', version: '0.1.0' };
@@ -151,6 +153,21 @@ const TOOLS = [
     }
   },
   {
+    name: 'portfolio_rollup',
+    description:
+      'Cross-project roll-up over ALL projects in the projects directory: per-project and portfolio PERT totals (raw sums rounded once at the boundary; activity/project durations assumed independent) and EVM aggregates (EV/AC/PV summed; portfolio CPI/SPI computed from the sums, never averaged from project indices). PERT + EVM only — no Monte Carlo. Projects that fail to load or carry no activities/EVM data are skipped and reported, never silently dropped. Declared SS/FF/lag dependency semantics are counted per project and modeled as finish-to-start.',
+    annotations: READ_ONLY_ANNOTATIONS,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        statusDate: {
+          type: 'string',
+          description: 'As-of date for EVM calculations (YYYY-MM-DD); default: today'
+        }
+      }
+    }
+  },
+  {
     name: 'risk_register',
     description:
       'Project risks scored by probability x impact, ranked highest first.',
@@ -225,9 +242,8 @@ const HANDLERS = {
     const issues = [];
     if (!acts.length) throw new DomainError(`project '${args.project}' has no activities`);
     const detailed = acts.map((a) => {
-      const o = a.distribution?.optimistic ?? (a.duration ?? NaN) * 0.7;
-      const m = a.distribution?.mostLikely ?? a.duration ?? NaN;
-      const pe = a.distribution?.pessimistic ?? (a.duration ?? NaN) * 1.5;
+      // Single-source derivation shared with the portfolio roll-up.
+      const { o, m, pe } = effectivePertTriple(a);
       if (
         !validDuration(a.duration) &&
         !(a.distribution && typeof a.distribution.mostLikely === 'number')
@@ -370,6 +386,48 @@ const HANDLERS = {
       statusDate: args.statusDate ?? new Date().toISOString().slice(0, 10)
     });
     return { project: p.name, ...result, read_only: true };
+  },
+
+  portfolio_rollup(args) {
+    const { projects: listed, warnings } = listProjects();
+    if (!listed.length) {
+      // Same generic message shape as getProject's empty-dir error — the
+      // configured dir path stays server-side (fatal-config carve-out does
+      // not cover tool responses). Dir-level parse warnings stay visible
+      // via list_projects.
+      throw new DomainError('no project files in the configured projects directory');
+    }
+    const loaded = [];
+    const loadSkipped = [];
+    const seenIds = new Set();
+    for (const meta of listed) {
+      // getProject resolves duplicate ids first-match-wins; analyzing the
+      // same project twice would double-count it in every total.
+      if (seenIds.has(meta.id)) {
+        loadSkipped.push({
+          project: meta.id,
+          reason: 'duplicate id; first occurrence already analyzed'
+        });
+        continue;
+      }
+      seenIds.add(meta.id);
+      const { project, error } = getProject(meta.id);
+      if (!project) {
+        loadSkipped.push({ project: meta.id, reason: error ?? 'project file unreadable' });
+        continue;
+      }
+      loaded.push(project);
+    }
+    const rollup = portfolioRollup(loaded, {
+      statusDate: args.statusDate ?? undefined
+    });
+    return {
+      ...rollup,
+      projectCount: listed.length,
+      warnings,
+      loadSkipped,
+      read_only: true
+    };
   },
 
   risk_register(args) {

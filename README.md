@@ -16,7 +16,7 @@ Waffle is the staff.
 
 ```bash
 git clone <this repo> && cd pocketpmo-mcp   # no dependencies to install
-npm test                                     # 184 tests (needs Node ≥ 20 — see below)
+npm test                                     # 220 tests (needs Node ≥ 20 — see below)
 node demo/demo.mjs                           # end-to-end demo transcript
 ```
 
@@ -49,6 +49,7 @@ skipped with a warning; the server never crashes on bad input.
 | `critical_path` | `project` | es/ef/ls/lf/float, critical set, project duration |
 | `monte_carlo` | `project`, `iterations?`, `targets?`, `seed?` | p10/p50/p90 (R-7), mean/σ, P(≤ target), criticalActivityFrequency |
 | `evm_metrics` | `project`, `statusDate?` | PV, EV, AC, CPI, SPI, EAC, VAC, timeline % (EAC/VAC null when CPI can't be computed, e.g. AC=0 or EV=0) |
+| `portfolio_rollup` | `statusDate?` | cross-project PERT totals + EVM aggregates over ALL projects; projects that fail to load or carry no data are skipped and reported. Independence assumed; CPI/SPI computed from summed EV/AC/PV, never averaged from project indices; PERT + EVM only (no Monte Carlo) |
 | `risk_register` | `project` | risks scored P×I, ranked |
 
 Design guarantees:
@@ -93,7 +94,7 @@ Restart Hermes; tools appear as `mcp_pocketpmo_list_projects`, etc.
 
 ## Waffle OS agent packs
 
-The `pmo-analyst` pack declares all 7 tools in `tools/mcp.servers.json`
+The `pmo-analyst` pack declares all 8 tools in `tools/mcp.servers.json`
 (`origin: "mcp:pocketpmo"`, `x-waffle.read_only: true`) and consumes them via
 its `pocketpmo-forecast-query` skill. Other PM-domain packs
 (portfolio-pmo-manager, project-controls-lead, senior-project-manager,
@@ -152,7 +153,7 @@ lib/calculators.js  PERT · CPM · Monte Carlo · EVM (pure, documented ports)
 lib/projects.js     JSON export-file store (tolerant loader)
 data/               sample project fixture
 demo/demo.mjs       real-subprocess E2E demo → markdown transcript
-test/               193 tests (node:test, zero deps; run on Node ≥ 20)
+test/               220 tests (node:test, zero deps; run on Node ≥ 20)
 ```
 
 ## Roadmap
