@@ -25,8 +25,9 @@ function makeTempDir(files) {
   return dir;
 }
 
-// Every makeTempDir/mkdtemp dir is removed after the file's tests finish —
-// previously ~10 dirs leaked into os.tmpdir() per run (cubic round 3 on #12).
+// Every makeTempDir dir is removed after the file's tests finish (cubic
+// round 3 on #12: ~10 dirs used to leak per run). Tests that call
+// fs.mkdtemp directly clean up in their own try/finally instead.
 const createdDirs = [];
 after(() => {
   for (const dir of createdDirs) {
@@ -138,9 +139,12 @@ describe('getProject', () => {
       'b.json': good
     });
     withDir(dir, () => {
-      // listProjects always tolerated it — metadata keeps the raw value
+      // listProjects always tolerated it; since the CR-round-5 metadata
+      // change, names render as strings ('404'), matching getProject
       const { projects } = listProjects();
       assert.equal(projects.length, 2);
+      assert.equal(projects[0].name, '404');
+      assert.ok(projects.every((p) => typeof p.name === 'string'));
       // name lookup of the VALID sibling must not be poisoned by a.json
       const byName = getProject('alpha');
       assert.equal(byName.error, null);
