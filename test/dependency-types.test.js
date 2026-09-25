@@ -52,6 +52,17 @@ describe('unsupported dependency declarations (SS/FF/lag) — warn-and-continue'
     assert.ok(issues.some((i) => /"ss"/.test(i.message)));
   });
 
+  test('lowercase FS with zero lag is recognized as supported (normalization pin)', () => {
+    // Strengthens the normalization check: without toUpperCase comparison,
+    // type 'fs' would be flagged as unsupported. The raw "ss" case above
+    // cannot distinguish that — it fails the comparison either way.
+    const issues = validateActivities([
+      act('a'),
+      act('b', { predecessors: [{ id: 'a', type: 'fs', lag: 0 }] })
+    ]);
+    assert.deepEqual(issues, []);
+  });
+
   test('non-numeric lag is flagged with its raw value', () => {
     const issues = validateActivities([
       act('a'),

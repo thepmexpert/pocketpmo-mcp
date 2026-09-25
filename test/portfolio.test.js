@@ -208,4 +208,72 @@ describe('portfolio_rollup (tool)', () => {
     assert.equal(JSON.stringify(a), JSON.stringify(b));
     assert.equal(a.evm.plannedValue > 0, true, 'PV must be positive mid-schedule');
   });
+
+  test('file-identity loading: a project NAMED like another project id cannot steal its row', () => {
+    // Regression (cubic P1): getProject resolves by id OR name, so loading
+    // beta.json's project via its id 'pb' could return alpha.json's project
+    // (whose NAME is 'pb') — silently corrupting rows and totals. Portfolio
+    // loading must be by FILE identity, not name re-resolution.
+    const alpha = {
+      id: 'pa',
+      name: 'pb', // name collides with beta's id
+      activities: [{ id: 'a1', duration: 10 }] // pert expected 10.333
+    };
+    const beta = {
+      id: 'pb',
+      name: 'beta',
+      activities: [{ id: 'b1', duration: 100 }] // pert expected 100
+    };
+    const dir = makeTempDir({
+      'alpha.json': JSON.stringify(alpha),
+      'beta.json': JSON.stringify(beta)
+    });
+    const payload = withDir(dir, () => payloadOf(call(6, 'portfolio_rollup', {})));
+    const rowBeta = payload.projects.find((p) => p.id === 'pb');
+    assert.ok(rowBeta, 'beta row missing');
+    // If alpha (10.333) had been loaded twice, beta's 103.333 would be missing.
+    // beta duration 100 -> triple (70,100,150) -> expected (70+400+150)/6 = 620/6.
+    assert.equal(payload.pert.totalExpected, r2(62 / 6 + 620 / 6));
+    assert.equal(rowBeta.activityCount, 1);
+    const rowAlpha = payload.projects.find((p) => p.id === 'pa');
+    assert.equal(rowAlpha.name, 'pb', 'alpha must keep its own name');
+  });
+
+  test('unreadable directory is reported as not-readable, never as empty', () => {
+    // Regression (cubic): readdir failure surfaced as the generic empty-dir
+    // message, discarding the lib's own diagnostic. Point the env at a FILE
+    // so readdir throws ENOTDIR deterministically.
+    const filePath = path.join(makeTempDir({}), 'not-a-dir.json');
+    fs.writeFileSync(filePath, '{}');
+    const result = withDir(filePath, () => call(7, 'portfolio_rollup', {}));
+    assert.equal(result.result.isError, true);
+    const text = result.result.content[0].text;
+    assert.match(text, /not readable/);
+    assert.equal(text.includes(filePath), false, 'no path leak');
+  });
+
+  test('all activities PERT-invalid: pert null + reason, never fabricated zeros', () => {
+    // Regression (cubic P2): an activity with no usable duration produced
+    // expected: 0 rows/total contributions — the duration is UNKNOWN, not 0.
+    const broken = { id: 'pz', name: 'no-durations', activities: [{ id: 'x1' }, { id: 'x2' }] };
+    const r2p = portfolioRollup([broken], { statusDate: '2026-01-06' });
+    const row = r2p.projects.find((p) => p.id === 'pz');
+    assert.equal(row.pert, null);
+    assert.match(row.pertSkipReason, /valid PERT/);
+    assert.equal(r2p.pert, null, 'no analyzable pert data -> null aggregate');
+    // Mixed: one valid + one invalid stays analyzed, invalid id reported.
+    const rmix = portfolioRollup(
+      [{ id: 'pm', name: 'mixed', activities: [{ id: 'm1', duration: 6 }, { id: 'm2' }] }],
+      {}
+    );
+    assert.equal(rmix.pert.projectCount, 1);
+    assert.deepEqual(rmix.pert.skippedActivities, [{ project: 'pm', ids: ['m2'] }]);
+  });
+
+  test('assumptions array is a copy — mutating a response cannot poison later ones', () => {
+    const first = portfolioRollup([projA], {});
+    first.assumptions.push('MUTATED');
+    const second = portfolioRollup([projA], {});
+    assert.ok(second.assumptions.every((a) => a !== 'MUTATED'));
+  });
 });

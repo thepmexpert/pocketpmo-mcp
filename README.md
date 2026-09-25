@@ -16,7 +16,7 @@ Waffle is the staff.
 
 ```bash
 git clone <this repo> && cd pocketpmo-mcp   # no dependencies to install
-npm test                                     # 220 tests (needs Node ≥ 20 — see below)
+npm test                                     # 225 tests (needs Node ≥ 20 — see below)
 node demo/demo.mjs                           # end-to-end demo transcript
 ```
 
@@ -148,12 +148,12 @@ to the app-port `cpmNetwork` by a randomized equivalence test.
 ## Architecture
 
 ```
-server.js           MCP framing (initialize/ping/tools/list/tools/call) + 7 handlers
+server.js           MCP framing (initialize/ping/tools/list/tools/call) + 8 handlers
 lib/calculators.js  PERT · CPM · Monte Carlo · EVM (pure, documented ports)
 lib/projects.js     JSON export-file store (tolerant loader)
 data/               sample project fixture
 demo/demo.mjs       real-subprocess E2E demo → markdown transcript
-test/               220 tests (node:test, zero deps; run on Node ≥ 20)
+test/               225 tests (node:test, zero deps; run on Node ≥ 20)
 ```
 
 ## Roadmap

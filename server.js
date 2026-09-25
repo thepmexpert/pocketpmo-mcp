@@ -26,7 +26,7 @@ import {
   round2
 } from './lib/calculators.js';
 import { portfolioRollup } from './lib/portfolio.js';
-import { listProjects, getProject, projectsDir } from './lib/projects.js';
+import { loadAllProjects, listProjects, getProject, projectsDir } from './lib/projects.js';
 
 const SERVER_INFO = { name: 'pocketpmo-mcp', version: '0.1.0' };
 const PROTOCOL_VERSION = '2025-06-18';
@@ -389,33 +389,53 @@ const HANDLERS = {
   },
 
   portfolio_rollup(args) {
-    const { projects: listed, warnings } = listProjects();
-    if (!listed.length) {
+    // ONE scan, file-identity loads (cubic P1/P2 + CodeRabbit on this PR):
+    // getProject's id-OR-name matching could resolve a listed entry to the
+    // WRONG project (a project named like another's id), and per-entry
+    // getProject lookups would rescan the directory once per project
+    // (quadratic syscalls on a synchronous stdio server). loadAllProjects
+    // yields each project parsed from its OWN file in a single pass.
+    const { projects: entries, warnings } = loadAllProjects();
+    const notReadable = warnings.find(
+      (w) => typeof w === 'string' && w.includes('not readable')
+    );
+    if (notReadable) {
+      // An unreadable directory is NOT an empty one — pass the lib's own
+      // generic diagnostic through instead of misreporting it.
+      throw new DomainError(notReadable);
+    }
+    if (!entries.length) {
       // Same generic message shape as getProject's empty-dir error — the
-      // configured dir path stays server-side (fatal-config carve-out does
-      // not cover tool responses). Dir-level parse warnings stay visible
-      // via list_projects.
+      // configured dir path stays server-side. Dir-level parse warnings
+      // stay visible below and via list_projects.
       throw new DomainError('no project files in the configured projects directory');
     }
     const loaded = [];
     const loadSkipped = [];
     const seenIds = new Set();
-    for (const meta of listed) {
-      // getProject resolves duplicate ids first-match-wins; analyzing the
-      // same project twice would double-count it in every total.
-      if (seenIds.has(meta.id)) {
+    for (const { file, project } of entries) {
+      // Display-safe id label (#13 class): a hostile id must not leak
+      // objects into the payload or throw at the boundary — unconvertible
+      // ids fall back to their file basename.
+      let label;
+      try {
+        label = project.id ?? file;
+        if (typeof label !== 'string' && typeof label !== 'number') label = file;
+        label = String(label);
+      } catch {
+        label = file;
+      }
+      if (seenIds.has(label)) {
+        // Duplicate ids across files: first occurrence analyzed, later ones
+        // reported — first-match-wins must not double-count a project.
         loadSkipped.push({
-          project: meta.id,
-          reason: 'duplicate id; first occurrence already analyzed'
+          project: label,
+          file,
+          reason: 'duplicate id; first occurrence analyzed'
         });
         continue;
       }
-      seenIds.add(meta.id);
-      const { project, error } = getProject(meta.id);
-      if (!project) {
-        loadSkipped.push({ project: meta.id, reason: error ?? 'project file unreadable' });
-        continue;
-      }
+      seenIds.add(label);
       loaded.push(project);
     }
     const rollup = portfolioRollup(loaded, {
@@ -423,7 +443,7 @@ const HANDLERS = {
     });
     return {
       ...rollup,
-      projectCount: listed.length,
+      projectCount: entries.length,
       warnings,
       loadSkipped,
       read_only: true
