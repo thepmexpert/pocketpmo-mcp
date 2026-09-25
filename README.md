@@ -16,7 +16,7 @@ Waffle is the staff.
 
 ```bash
 git clone <this repo> && cd pocketpmo-mcp   # no dependencies to install
-npm test                                     # 168 tests (needs Node ≥ 20 — see below)
+npm test                                     # 184 tests (needs Node ≥ 20 — see below)
 node demo/demo.mjs                           # end-to-end demo transcript
 ```
 

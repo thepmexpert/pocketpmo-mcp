@@ -545,6 +545,23 @@ test('review §4.2: targets are clamped to MAX_TARGETS', () => {
   assert.equal(payload.probabilityByTarget.length, 100, 'first 100 targets only');
 });
 
+// Bot sweep round 1 (cubic P2): the README documents PMO_MAX_TARGETS as
+// env-tunable — the read must actually be dynamic, not a doc fiction.
+test('review §4.2: PMO_MAX_TARGETS dynamically tightens the targets cap', () => {
+  process.env.PMO_MAX_TARGETS = '5';
+  try {
+    const targets = Array.from({ length: 150 }, (_, i) => i + 1);
+    const r = handleRequest(req(75, 'tools/call', {
+      name: 'monte_carlo',
+      arguments: { project: '101', iterations: 50, targets },
+    }));
+    const payload = JSON.parse(r.result.content[0].text);
+    assert.equal(payload.probabilityByTarget.length, 5, 'env cap wins over the default 100');
+  } finally {
+    delete process.env.PMO_MAX_TARGETS;
+  }
+});
+
 // §4.2: an oversized input line is rejected BEFORE JSON.parse with a
 // predictable protocol error (id null — the line is deliberately not
 // parsed), and the process keeps serving. The limit is read dynamically so

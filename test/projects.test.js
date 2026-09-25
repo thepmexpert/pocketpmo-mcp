@@ -437,12 +437,27 @@ describe('getProject', () => {
     });
   });
 
-  test('unreadable dir reports the readdir cause once, not a double path', () => {
+  test('unreadable dir reports a generic in-band message, path to stderr only', () => {
     withDir('/nonexistent/pmo-dir-xyz', () => {
-      const { project, error } = getProject('1');
-      assert.equal(project, null);
-      assert.ok(error.startsWith('projects dir not readable:'), `got: ${error}`);
-      assert.equal(error.split(projectsDir()).length - 1, 1, 'path appears once');
+      const origWrite = process.stderr.write;
+      const logged = [];
+      process.stderr.write = (chunk) => {
+        logged.push(String(chunk));
+        return true;
+      };
+      try {
+        const { project, error } = getProject('1');
+        assert.equal(project, null);
+        // §4.3 (bot sweep round 1, both reviewers converged): the fatal
+        // readdir error previously leaked the absolute configured path
+        // in-band through the DomainError passthrough. Same policy as the
+        // empty-dir branch: generic in-band, path on stderr.
+        assert.ok(error.startsWith('configured projects directory is not readable'), `got: ${error}`);
+        assert.ok(!error.includes(projectsDir()), `abs path leaked in-band: ${error}`);
+        assert.ok(logged.some((l) => l.includes(projectsDir())), 'path must reach stderr for the operator');
+      } finally {
+        process.stderr.write = origWrite;
+      }
     });
   });
 });

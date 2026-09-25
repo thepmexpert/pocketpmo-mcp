@@ -53,6 +53,10 @@ const maxConcurrent = () => {
   const raw = Number(process.env.PMO_MAX_CONCURRENT);
   return Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : DEFAULT_MAX_CONCURRENT;
 };
+const maxTargets = () => {
+  const raw = Number(process.env.PMO_MAX_TARGETS);
+  return Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : MAX_TARGETS;
+};
 
 // §1.3: MCP tool annotations. All tools are pure reads over the projects
 // directory (deterministic: monte_carlo is seeded by default), so every
@@ -125,7 +129,7 @@ const TOOLS = [
         targets: {
           type: 'array',
           items: { type: 'number' },
-          description: 'Target durations (days) for completion probability'
+          description: 'Target durations (days) for completion probability. Beyond the cap (default 100; PMO_MAX_TARGETS) targets are ignored.'
         },
         seed: { type: 'number', description: 'RNG seed for reproducible runs (default 42)' }
       },
@@ -333,7 +337,7 @@ const HANDLERS = {
       rng: makeRng(seed),
       // §4.2: clamped like iterations (documented in the tool description —
       // "first 100 used"); items are still coerced/reported downstream.
-      targets: Array.isArray(args.targets) ? args.targets.slice(0, MAX_TARGETS) : []
+      targets: Array.isArray(args.targets) ? args.targets.slice(0, maxTargets()) : []
     };
     // §2.2: with a request context (serve() provides one for every
     // monte_carlo call), the run is cancellable and yields to the event
@@ -581,7 +585,10 @@ export function serve({ stdin = process.stdin, stdout = process.stdout } = {}) {
     const trimmed = line.trim();
     if (!trimmed) return;
     const limit = maxMessageBytes();
-    if (Buffer.byteLength(trimmed) > limit) {
+    // Measure the UNTRIMMED line (bot sweep round 1, both reviewers): trim()
+    // strips unbounded whitespace, so a whitespace-padded oversized line
+    // would sail past the cap and still reach JSON.parse.
+    if (Buffer.byteLength(line) > limit) {
       // id null: the line is deliberately not parsed, so the request id is
       // unknowable (JSON-RPC allows id null for undetectable ids).
       respond(null, {
