@@ -119,7 +119,7 @@ const TOOLS = [
   {
     name: 'monte_carlo',
     description:
-      'Monte Carlo schedule simulation: duration percentiles, mean, stdDev, probability of finishing by target dates, and criticality — criticalActivityFrequency is the per-activity probability of sitting on the critical path in a simulation run (criticalPathFrequency is a deprecated alias with the same per-activity shares; whole-path frequencies are not reported because simulated path identity is unstable). Deterministic (seeded). Targets beyond the first 100 are ignored.',
+      'Monte Carlo schedule simulation: duration percentiles, mean, stdDev, probability of finishing by target dates, and criticality — criticalActivityFrequency is the per-activity probability of sitting on the critical path in a simulation run (criticalPathFrequency is a deprecated alias with the same per-activity shares; whole-path frequencies are not reported because simulated path identity is unstable). Deterministic (seeded). Targets beyond the cap (default 100; PMO_MAX_TARGETS) are ignored.',
     annotations: READ_ONLY_ANNOTATIONS,
     inputSchema: {
       type: 'object',
@@ -336,7 +336,8 @@ const HANDLERS = {
       iterations,
       rng: makeRng(seed),
       // §4.2: clamped like iterations (documented in the tool description —
-      // "first 100 used"); items are still coerced/reported downstream.
+      // "beyond the cap are ignored"); items are still coerced/reported
+      // downstream.
       targets: Array.isArray(args.targets) ? args.targets.slice(0, maxTargets()) : []
     };
     // §2.2: with a request context (serve() provides one for every
@@ -580,7 +581,6 @@ export function serve({ stdin = process.stdin, stdout = process.stdout } = {}) {
   // minutes of work with no bound).
   const inflight = new Map();
   const entryFor = (id) => (id !== undefined && id !== null ? inflight.get(id) : null);
-  let anonSeq = 0;
   // Tracked async dispatch promises: the shutdown drain must wait for them,
   // or a direct-run exit truncates every in-flight monte carlo result (bot
   // sweep round 1, cubic P1 — same failure class as the batch-5 exit bug).
@@ -651,17 +651,18 @@ export function serve({ stdin = process.stdin, stdout = process.stdout } = {}) {
     // write chain as responses (an inline stdout.write would overtake
     // earlier responses — batch-6 round-sweep lesson) and are DROPPED
     // under admission pressure: they are expendable, responses are not.
-    // Id-less (notification-style) monte_carlo calls get a synthetic key:
-    // they must yield AND count toward the cap like any other run, or a
-    // client sidesteps §2.2 entirely with "id": null (bot sweep round 1,
-    // cubic P2).
+    // Id-less (notification-style) monte carlo calls get a SYNTHETIC KEY
+    // OBJECT: Map keys by identity, and a plain object is unreachable from
+    // JSON-parsed request ids — a crafted `"#anon-1"` string id can never
+    // collide with, overwrite, or cancel a run it does not own (bot sweep
+    // round 2, cubic P1: the first draft reused a string key).
     let context = null;
     let inflightKey = null;
     if (isMonteCarlo) {
       inflightKey =
         request.id !== undefined && request.id !== null
           ? request.id
-          : `#anon-${++anonSeq}`;
+          : { synthetic: 'anon-monte-carlo' };
       const controller = new AbortController();
       const progressToken = request.params?._meta?.progressToken;
       context = {

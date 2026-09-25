@@ -455,6 +455,13 @@ describe('getProject', () => {
         assert.ok(error.startsWith('configured projects directory is not readable'), `got: ${error}`);
         assert.ok(!error.includes(projectsDir()), `abs path leaked in-band: ${error}`);
         assert.ok(logged.some((l) => l.includes(projectsDir())), 'path must reach stderr for the operator');
+        // Bot sweep round 2 (cubic P3): pin the EPIPE crash guard itself —
+        // logToStderr must have attached an stderr 'error' consumer, or an
+        // async EPIPE on a pipe-backed stderr is an uncaught exception.
+        assert.ok(
+          process.stderr.listenerCount('error') >= 1,
+          'stderr must have an error consumer (async EPIPE crash guard)'
+        );
       } finally {
         process.stderr.write = origWrite;
       }
