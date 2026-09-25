@@ -125,10 +125,24 @@ Input limits (env-tunable, read per request):
 |---|---|---|
 | `PMO_MAX_MESSAGE_BYTES` | 1048576 | Lines above the cap are rejected with `-32600` before `JSON.parse`; the server keeps serving. |
 | `PMO_MAX_TARGETS` | 100 | `monte_carlo` uses only the first 100 targets. |
-| `MAX_ITERATIONS` | 20000 | `monte_carlo` iteration clamp (not env-tunable; exported for tests). |
+| `PMO_MAX_ITERATIONS` | 20000 | `monte_carlo` iteration clamp (dynamic env read). |
+| `PMO_MAX_ACTIVITIES` | 5000 | `monte_carlo` rejects larger networks in-band, naming the limit. |
+| `PMO_MAX_CONCURRENT` | 2 | Live `monte_carlo` runs beyond the cap get a predictable busy rejection. |
 
 The pipeline cap (`MAX_PENDING` = 1000 admitted responses) and the per-file
 read gates (symlink/regular-file/size) are documented in the source.
+
+## Responsiveness and cancellation
+
+`monte_carlo` runs on a yielding, cancellable engine: the simulation returns
+to the event loop every 250 iterations (ping/protocol handling never
+starves), honours `notifications/cancelled` (a cancelled request gets no
+response, per the MCP cancellation contract), and emits
+`notifications/progress` when the request carries a
+`_meta.progressToken`. Results are identical to the synchronous engine for
+the same seed. CPM evaluation inside the simulation is a topological
+single-pass (O(V + E) per iteration) whose output is pinned byte-identical
+to the app-port `cpmNetwork` by a randomized equivalence test.
 
 ## Architecture
 
@@ -138,7 +152,7 @@ lib/calculators.js  PERT · CPM · Monte Carlo · EVM (pure, documented ports)
 lib/projects.js     JSON export-file store (tolerant loader)
 data/               sample project fixture
 demo/demo.mjs       real-subprocess E2E demo → markdown transcript
-test/               184 tests (node:test, zero deps; run on Node ≥ 20)
+test/               193 tests (node:test, zero deps; run on Node ≥ 20)
 ```
 
 ## Roadmap

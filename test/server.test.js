@@ -585,3 +585,161 @@ test('review §4.2: oversized line -> -32600 id null, server keeps serving', asy
   assert.match(first.error.message, /PMO_MAX_MESSAGE_BYTES/);
   assert.equal(JSON.parse(written[1]).id, 2, 'server must keep serving after the rejection');
 });
+
+// ---------------------------------------------------------------------------
+// External review batch 2 (§2.2 cancellation/progress/limits)
+// ---------------------------------------------------------------------------
+
+// §2.2: monte_carlo through serve() is cancellable. Both frames arrive in
+// one chunk, so readline processes them synchronously in order: the run
+// dispatches, yields at its first setImmediate, the cancellation lands,
+// and the run rejects BEFORE the response microtasks continue. Per the MCP
+// cancellation contract the server sends NO response for the cancelled
+// request — and keeps serving.
+test('review §2.2: notifications/cancelled stops an in-flight monte carlo (no response, server alive)', async () => {
+  const written = [];
+  const fakeStdout = {
+    write(chunk, cb) {
+      written.push(chunk);
+      cb();
+      return true;
+    },
+    on() {},
+  };
+  const { serve } = await import('../server.js');
+  const { PassThrough } = await import('node:stream');
+  const stdin = new PassThrough();
+  const rl = serve({ stdin, stdout: fakeStdout });
+  let drained = 0;
+  rl.on('drained', () => {
+    drained++;
+  });
+  stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 10, method: 'tools/call', params: { name: 'monte_carlo', arguments: { project: '101', iterations: 5000 } } }) + '\n');
+  stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/cancelled', params: { requestId: 10 } }) + '\n');
+  stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 11, method: 'ping' }) + '\n');
+  stdin.end();
+  await new Promise((resolve) => stdin.on('end', resolve));
+  for (let i = 0; i < 20; i++) await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(drained, 1, 'write chain must settle');
+  const parsed = written.map((c) => JSON.parse(c));
+  assert.equal(
+    parsed.some((p) => p.id === 10),
+    false,
+    'a cancelled request must get NO response (MCP cancellation contract)'
+  );
+  assert.ok(
+    parsed.some((p) => p.id === 11 && p.result),
+    'server must keep serving after a cancellation'
+  );
+});
+
+// §2.2: progress notifications ride the same ordered write chain when the
+// client supplies a progressToken.
+test('review §2.2: monte carlo emits notifications/progress when a progressToken is present', async () => {
+  const written = [];
+  const fakeStdout = {
+    write(chunk, cb) {
+      written.push(chunk);
+      cb();
+      return true;
+    },
+    on() {},
+  };
+  const { serve } = await import('../server.js');
+  const { PassThrough } = await import('node:stream');
+  const stdin = new PassThrough();
+  serve({ stdin, stdout: fakeStdout });
+  stdin.write(JSON.stringify({
+    jsonrpc: '2.0', id: 20, method: 'tools/call',
+    params: { name: 'monte_carlo', _meta: { progressToken: 'tok-1' }, arguments: { project: '101', iterations: 50 } }
+  }) + '\n');
+  stdin.end();
+  await new Promise((resolve) => stdin.on('end', resolve));
+  for (let i = 0; i < 20; i++) await new Promise((resolve) => setImmediate(resolve));
+  const parsed = written.map((c) => JSON.parse(c));
+  const notes = parsed.filter((p) => p.method === 'notifications/progress');
+  assert.ok(notes.length >= 1, `expected progress notifications, got ${notes.length}`);
+  for (const n of notes) {
+    assert.equal(n.params.progressToken, 'tok-1');
+    assert.equal(n.params.total, 50);
+    assert.equal(n.id, undefined, 'notifications carry no id');
+  }
+  const last = parsed[parsed.length - 1];
+  assert.equal(last.id, 20, 'the final frame must be the response');
+  assert.equal(last.result.isError, false);
+});
+
+// §2.2: concurrency cap — MC requests beyond the cap get a predictable
+// in-band busy rejection. All three frames arrive in one chunk: lines 1-2
+// dispatch (inflight full) synchronously before any async continuation,
+// so line 3 is deterministically rejected.
+test('review §2.2: monte carlo beyond PMO_MAX_CONCURRENT is rejected in-band', async () => {
+  const written = [];
+  const fakeStdout = {
+    write(chunk, cb) {
+      written.push(chunk);
+      cb();
+      return true;
+    },
+    on() {},
+  };
+  const { serve } = await import('../server.js');
+  const { PassThrough } = await import('node:stream');
+  const stdin = new PassThrough();
+  serve({ stdin, stdout: fakeStdout });
+  process.env.PMO_MAX_CONCURRENT = '2';
+  try {
+    for (const id of [30, 31, 32]) {
+      stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method: 'tools/call', params: { name: 'monte_carlo', arguments: { project: '101', iterations: 100 } } }) + '\n');
+    }
+    stdin.end();
+    await new Promise((resolve) => stdin.on('end', resolve));
+    for (let i = 0; i < 50; i++) await new Promise((resolve) => setImmediate(resolve));
+  } finally {
+    delete process.env.PMO_MAX_CONCURRENT;
+  }
+  const parsed = written.map((c) => JSON.parse(c));
+  const byId = Object.fromEntries(parsed.filter((p) => p.id != null).map((p) => [p.id, p]));
+  assert.ok(byId[30] && byId[31], 'first two runs must be admitted');
+  assert.ok(byId[32].result.isError, 'third run must be rejected');
+  assert.match(byId[32].result.content[0].text, /server busy/);
+  assert.match(byId[32].result.content[0].text, /PMO_MAX_CONCURRENT/);
+});
+
+// §2.2: PMO_MAX_ACTIVITIES — absurd workloads are rejected predictably,
+// naming the limit, instead of running the process hot for minutes.
+test('review §2.2: monte carlo above PMO_MAX_ACTIVITIES is rejected with the limit named', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pmo-cap-'));
+  const acts = Array.from({ length: 51 }, (_, i) => ({
+    id: `a${i}`,
+    duration: 1,
+    predecessors: i === 0 ? [] : [`a${i - 1}`],
+  }));
+  fs.writeFileSync(path.join(dir, 'big.json'), JSON.stringify({ id: 'big', name: 'Big', activities: acts }));
+  const prevDir = process.env.PMO_PROJECTS_DIR;
+  process.env.PMO_PROJECTS_DIR = dir;
+  try {
+    process.env.PMO_MAX_ACTIVITIES = '50';
+    const r = handleRequest(req(81, 'tools/call', { name: 'monte_carlo', arguments: { project: 'big', iterations: 100 } }));
+    assert.equal(r.result.isError, true);
+    assert.match(r.result.content[0].text, /51 activities/);
+    assert.match(r.result.content[0].text, /capped at 50 \(PMO_MAX_ACTIVITIES\)/);
+  } finally {
+    if (prevDir === undefined) delete process.env.PMO_PROJECTS_DIR;
+    else process.env.PMO_PROJECTS_DIR = prevDir;
+    delete process.env.PMO_MAX_ACTIVITIES;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// §2.2: PMO_MAX_ITERATIONS is read dynamically — env tightens the clamp.
+test('review §2.2: PMO_MAX_ITERATIONS dynamically clamps the requested count', async () => {
+  process.env.PMO_MAX_ITERATIONS = '10';
+  try {
+    const r = handleRequest(req(80, 'tools/call', { name: 'monte_carlo', arguments: { project: '101', iterations: 1000 } }));
+    const payload = JSON.parse(r.result.content[0].text);
+    assert.equal(payload.iterations, 10, 'requested 1000 must clamp to the env limit 10');
+  } finally {
+    delete process.env.PMO_MAX_ITERATIONS;
+  }
+});
