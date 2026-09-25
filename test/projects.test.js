@@ -31,7 +31,13 @@ function makeTempDir(files) {
 const createdDirs = [];
 after(() => {
   for (const dir of createdDirs) {
-    fs.rmSync(dir, { recursive: true, force: true });
+    try {
+      fs.rmSync(dir, { recursive: true, force: true });
+    } catch {
+      // One stubborn dir (EPERM/EBUSY on lock-holding platforms) must not
+      // abort the loop or fail the hook — the other dirs still get cleaned
+      // and the suite stays green (cubic round 6 on #13).
+    }
   }
 });
 
