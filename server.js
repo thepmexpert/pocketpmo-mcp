@@ -399,12 +399,14 @@ const HANDLERS = {
     const seen = new Set();
     const loadSkipped = [];
     const { count, skippedFiles, warnings, fatal } = loadAllProjects((project, file) => {
-      // Display-safe dedupe label (#13/#48 class): a hostile id must not
-      // leak objects or throw at the boundary — unconvertible ids fall
-      // back to name, then to the file basename.
+      // Identity key = id, falling back to the (unique) file basename —
+      // NEVER the name (cubic round 3): the loader deliberately accepts
+      // distinct files sharing a name, and name-based dedupe dropped them
+      // with a false "duplicate id" reason. Display label stays id ?? file;
+      // a hostile id falls back to the file via the catch (#48).
       let label;
       try {
-        label = project.id ?? project.name ?? file;
+        label = project.id ?? file;
         if (typeof label !== 'string' && typeof label !== 'number') label = file;
         label = String(label);
       } catch {

@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { portfolioRollup } from '../lib/portfolio.js';
+import { portfolioRollup, createPortfolioFold } from '../lib/portfolio.js';
+import { loadAllProjects } from '../lib/projects.js';
 import { handleRequest } from '../server.js';
 
 // portfolio_rollup is BRIDGE-ORIGINAL functionality: the app is
@@ -129,6 +130,42 @@ describe('portfolioRollup (lib)', () => {
       {}
     );
     assert.equal(rDep.projects[0].dependencyWarnings, 1);
+  });
+
+  test('hostile activity ids render, never leak, in pert skip reports', () => {
+    // cubic round 3: skippedIds are payload data too — {"toString":null}
+    // must render via the display-safe boundary like every other field.
+    const r = portfolioRollup(
+      [
+        {
+          id: 'ph',
+          name: 'hostile-activity-id',
+          activities: [{ id: 'ok1', duration: 6 }, { id: { toString: null } }]
+        }
+      ],
+      {}
+    );
+    assert.ok(r.pert, 'mixed fixture must stay analyzable');
+    assert.deepEqual(r.pert.skippedActivities, [
+      { project: 'ph', ids: ['[unprintable]'] }
+    ]);
+    assert.equal(typeof r.projects[0].pert.skipped[0], 'string');
+  });
+
+  test('fold result() is a snapshot — mutating a response cannot poison the fold', () => {
+    // cubic round 3: result() exposed the internal rows array; a caller
+    // mutating one response changed every later result of the same fold.
+    const fold = createPortfolioFold({});
+    fold.add({ id: 'p1', name: 'one', activities: [{ id: 'a1', duration: 4 }] });
+    const r1 = fold.result();
+    r1.projects.push({ junk: true });
+    r1.projects[0].dependencyWarnings = 99;
+    r1.pert.totalExpected = -1;
+    const r2 = fold.result();
+    assert.equal(r2.projects.length, 1);
+    assert.equal(r2.projects[0].dependencyWarnings, 0);
+    // (o + 4m + p)/6 = (2.8 + 16 + 6)/6 = 24.8/6 = 4.1333 -> 4.13
+    assert.equal(r2.pert.totalExpected, 4.13);
   });
 
   test('assumptions are stated in the payload, not just docs', () => {
@@ -273,6 +310,43 @@ describe('portfolio_rollup (tool)', () => {
     assert.match(text, /a\.json, b\.json, c\.json/);
     assert.match(text, /\+2 more; full list via list_projects/);
     assert.equal(text.includes(dir), false);
+  });
+
+  test('same-name distinct projects are BOTH analyzed (dedupe key is id/file, never name)', () => {
+    // cubic round 3: adding a name fallback to the dedupe key turned
+    // first-match-wins into a duplicate-NAME rule — the loader deliberately
+    // accepts name-duplicate files, so both must be analyzed.
+    const x = { name: 'twin', activities: [{ id: 'x1', duration: 6 }] };
+    const y = { name: 'twin', activities: [{ id: 'y1', duration: 60 }] };
+    const dir = makeTempDir({ 'x.json': JSON.stringify(x), 'y.json': JSON.stringify(y) });
+    const payload = withDir(dir, () => payloadOf(call(12, 'portfolio_rollup', {})));
+    assert.equal(payload.projectCount, 2);
+    assert.equal(payload.pert.projectCount, 2);
+    assert.equal(payload.loadSkipped.length, 0);
+    // x: (4.2+24+9)/6 = 6.2; y: (42+240+90)/6 = 62 -> 68.2
+    assert.equal(payload.pert.totalExpected, r2(37.2 / 6 + 372 / 6));
+  });
+
+  test('a throwing analysis callback degrades to skip-and-report, never propagates', () => {
+    // cubic round 3: a throw escaping loadAllProjects would skip the scan's
+    // cache-eviction pass (stale entries retained). The lib converts
+    // callback failures into the established skip-and-report pattern.
+    const dir = makeTempDir({ 'ok.json': JSON.stringify(projA) });
+    let calls = 0;
+    const outcome = withDir(dir, () =>
+      loadAllProjects(() => {
+        calls += 1;
+        throw new Error('boom');
+      })
+    );
+    assert.equal(outcome.fatal, null, 'callback failure is not a directory fatal');
+    assert.equal(outcome.count, 0);
+    assert.equal(calls, 1, 'called exactly once — no retry storm');
+    assert.deepEqual(outcome.skippedFiles, ['ok.json']);
+    assert.ok(
+      outcome.warnings.some((w) => typeof w === 'string' && /ok\.json/.test(w)),
+      `failure must be reported per file: ${JSON.stringify(outcome.warnings)}`
+    );
   });
 
   test('file-identity loading: a project NAMED like another project id cannot steal its row', () => {

@@ -16,7 +16,7 @@ Waffle is the staff.
 
 ```bash
 git clone <this repo> && cd pocketpmo-mcp   # no dependencies to install
-npm test                                     # 229 tests (needs Node ≥ 20 — see below)
+npm test                                     # 233 tests (needs Node ≥ 20 — see below)
 node demo/demo.mjs                           # end-to-end demo transcript
 ```
 
@@ -153,7 +153,7 @@ lib/calculators.js  PERT · CPM · Monte Carlo · EVM (pure, documented ports)
 lib/projects.js     JSON export-file store (tolerant loader)
 data/               sample project fixture
 demo/demo.mjs       real-subprocess E2E demo → markdown transcript
-test/               229 tests (node:test, zero deps; run on Node ≥ 20)
+test/               233 tests (node:test, zero deps; run on Node ≥ 20)
 ```
 
 ## Roadmap
