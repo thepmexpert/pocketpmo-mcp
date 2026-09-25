@@ -15,6 +15,8 @@ import {
   pertCompletionProbability,
   cpmNetwork,
   runMonteCarlo,
+  runMonteCarloAsync,
+  MonteCarloCancelledError,
   makeRng,
   evmMetrics,
   validateActivities,
@@ -33,6 +35,28 @@ export const MAX_ITERATIONS = 20000;
 // §4.2: targets are clamped like iterations — an unbounded array would
 // otherwise inflate both compute and response size from a single argument.
 export const MAX_TARGETS = 100;
+// §2.2 defaults. All three are read DYNAMICALLY (env can tune them per
+// request; same discipline as the cache caps) so tests and operators drive
+// them without module-reload gymnastics.
+const DEFAULT_MAX_ACTIVITIES = 5000;
+const DEFAULT_MAX_CONCURRENT = 2;
+
+const maxIterations = () => {
+  const raw = Number(process.env.PMO_MAX_ITERATIONS);
+  return Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : MAX_ITERATIONS;
+};
+const maxActivities = () => {
+  const raw = Number(process.env.PMO_MAX_ACTIVITIES);
+  return Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : DEFAULT_MAX_ACTIVITIES;
+};
+const maxConcurrent = () => {
+  const raw = Number(process.env.PMO_MAX_CONCURRENT);
+  return Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : DEFAULT_MAX_CONCURRENT;
+};
+const maxTargets = () => {
+  const raw = Number(process.env.PMO_MAX_TARGETS);
+  return Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : MAX_TARGETS;
+};
 
 // §1.3: MCP tool annotations. All tools are pure reads over the projects
 // directory (deterministic: monte_carlo is seeded by default), so every
@@ -95,17 +119,17 @@ const TOOLS = [
   {
     name: 'monte_carlo',
     description:
-      'Monte Carlo schedule simulation: duration percentiles, mean, stdDev, probability of finishing by target dates, and criticality — criticalActivityFrequency is the per-activity probability of sitting on the critical path in a simulation run (criticalPathFrequency is a deprecated alias with the same per-activity shares; whole-path frequencies are not reported because simulated path identity is unstable). Deterministic (seeded). Targets beyond the first 100 are ignored.',
+      'Monte Carlo schedule simulation: duration percentiles, mean, stdDev, probability of finishing by target dates, and criticality — criticalActivityFrequency is the per-activity probability of sitting on the critical path in a simulation run (criticalPathFrequency is a deprecated alias with the same per-activity shares; whole-path frequencies are not reported because simulated path identity is unstable). Deterministic (seeded). Targets beyond the cap (default 100; PMO_MAX_TARGETS) are ignored.',
     annotations: READ_ONLY_ANNOTATIONS,
     inputSchema: {
       type: 'object',
       properties: {
         project: { type: 'string' },
-        iterations: { type: 'number', description: 'Default 2000, max 20000' },
+        iterations: { type: 'number', description: 'Default 2000, max 20000 (PMO_MAX_ITERATIONS)' },
         targets: {
           type: 'array',
           items: { type: 'number' },
-          description: 'Target durations (days) for completion probability'
+          description: 'Target durations (days) for completion probability. Beyond the cap (default 100; PMO_MAX_TARGETS) targets are ignored.'
         },
         seed: { type: 'number', description: 'RNG seed for reproducible runs (default 42)' }
       },
@@ -279,17 +303,26 @@ const HANDLERS = {
     };
   },
 
-  monte_carlo(args) {
+  monte_carlo(args, context) {
     const p = loadOrFail(args.project);
     const acts = Array.isArray(p.activities) ? p.activities : [];
     if (!acts.length) throw new DomainError(`project '${args.project}' has no activities`);
-    // Coerce → default, floor fractional, clamp to [1, MAX_ITERATIONS].
+    // §2.2: reject absurd workloads PREDICTABLY instead of running the
+    // process hot for minutes — the limit names itself so the caller can
+    // raise it consciously (env) or split the network.
+    const activityCap = maxActivities();
+    if (acts.length > activityCap) {
+      throw new DomainError(
+        `project '${args.project}' has ${acts.length} activities; monte carlo is capped at ${activityCap} (PMO_MAX_ACTIVITIES) — split the network or raise the limit`
+      );
+    }
+    // Coerce → default, floor fractional, clamp to [1, maxIterations()].
     // runMonteCarlo throws on non-integers, so floor before it sees the value.
     // Default (2000) only for non-finite input — a floored finite value like
     // 0.5 → 0 must clamp to 1, not silently become the full default.
     const requested = Number(args.iterations);
     const floored = Number.isFinite(requested) ? Math.floor(requested) : 2000;
-    const iterations = Math.min(Math.max(floored, 1), MAX_ITERATIONS);
+    const iterations = Math.min(Math.max(floored, 1), maxIterations());
     // ?? not ||: seed 0 is a legitimate seed — `Number(0) || 42` silently
     // replaced it with 42. makeRng itself guards the LCG-zero edge
     // (state 0 produces an all-zero sequence, so 0 maps to state 1 there).
@@ -298,14 +331,31 @@ const HANDLERS = {
       seedArg !== undefined && Number.isFinite(seedArg)
         ? seedArg
         : 42;
-    const result = runMonteCarlo({
+    const runArgs = {
       activities: structuredClone(acts),
       iterations,
       rng: makeRng(seed),
       // §4.2: clamped like iterations (documented in the tool description —
-      // "first 100 used"); items are still coerced/reported downstream.
-      targets: Array.isArray(args.targets) ? args.targets.slice(0, MAX_TARGETS) : []
-    });
+      // "beyond the cap are ignored"); items are still coerced/reported
+      // downstream.
+      targets: Array.isArray(args.targets) ? args.targets.slice(0, maxTargets()) : []
+    };
+    // §2.2: with a request context (serve() provides one for every
+    // monte_carlo call), the run is cancellable and yields to the event
+    // loop; progress rides the MCP progress notification when the client
+    // supplied a progressToken. Direct handleRequest calls without a
+    // context keep the synchronous path (identical results).
+    if (context && context.signal) {
+      return runMonteCarloAsync({
+        ...runArgs,
+        signal: context.signal,
+        onProgress:
+          context.progressToken !== undefined && context.progressToken !== null
+            ? (progress, total) => context.emitProgress(progress, total)
+            : undefined
+      }).then((result) => ({ project: p.name, ...result, read_only: true }));
+    }
+    const result = runMonteCarlo(runArgs);
     return { project: p.name, ...result, read_only: true };
   },
 
@@ -358,7 +408,7 @@ function errorResult(message) {
   return { content: [{ type: 'text', text: message }], isError: true };
 }
 
-export function handleRequest(request, handlers = HANDLERS) {
+export function handleRequest(request, handlers = HANDLERS, context = null) {
   if (!request || typeof request !== 'object') {
     return { jsonrpc: '2.0', id: null, error: { code: -32600, message: 'invalid request: expected an object' } };
   }
@@ -411,7 +461,26 @@ export function handleRequest(request, handlers = HANDLERS) {
     }
     const handler = handlers[params.name];
     try {
-      return { jsonrpc: '2.0', id, result: textResult(handler(args)) };
+      const value = handler(args, context);
+      // §2.2: monte_carlo with a request context returns a PROMISE (the
+      // cancellable, yielding run). Same response envelope, settled async —
+      // serve() tracks the promise so notifications/cancelled can reach it.
+      if (value && typeof value.then === 'function') {
+        return value.then(
+          (payload) => ({ jsonrpc: '2.0', id, result: textResult(payload) }),
+          (error) => {
+            // Cancellation propagates: serve() owns the "no response" side
+            // of the MCP cancellation contract.
+            if (error instanceof MonteCarloCancelledError) throw error;
+            if (error instanceof DomainError) {
+              return { jsonrpc: '2.0', id, result: errorResult(error.message) };
+            }
+            console.error(`pocketpmo-mcp: internal error in tool '${params.name}':`, error);
+            return { jsonrpc: '2.0', id, result: errorResult('internal tool error; see server logs') };
+          }
+        );
+      }
+      return { jsonrpc: '2.0', id, result: textResult(value) };
     } catch (error) {
       // §8.2: expected domain errors keep their safe operator-facing
       // messages; anything else is an internal bug — full detail to stderr
@@ -505,11 +574,26 @@ export function serve({ stdin = process.stdin, stdout = process.stdout } = {}) {
     const raw = Number(process.env.PMO_MAX_MESSAGE_BYTES);
     return Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : DEFAULT_MAX_MESSAGE_BYTES;
   };
+  // §2.2: in-flight cancellable calculations, keyed by request id.
+  // notifications/cancelled aborts the matching entry; the concurrency cap
+  // bounds how many Monte Carlo runs can be live at once (a pipelining
+  // client stacking dozens of 20k-iteration runs would otherwise queue
+  // minutes of work with no bound).
+  const inflight = new Map();
+  const entryFor = (id) => (id !== undefined && id !== null ? inflight.get(id) : null);
+  // Tracked async dispatch promises: the shutdown drain must wait for them,
+  // or a direct-run exit truncates every in-flight monte carlo result (bot
+  // sweep round 1, cubic P1 — same failure class as the batch-5 exit bug).
+  const asyncSettlers = new Set();
+
   rl.on('line', (line) => {
     const trimmed = line.trim();
     if (!trimmed) return;
     const limit = maxMessageBytes();
-    if (Buffer.byteLength(trimmed) > limit) {
+    // Measure the UNTRIMMED line (bot sweep round 1, both reviewers): trim()
+    // strips unbounded whitespace, so a whitespace-padded oversized line
+    // would sail past the cap and still reach JSON.parse.
+    if (Buffer.byteLength(line) > limit) {
       // id null: the line is deliberately not parsed, so the request id is
       // unknowable (JSON-RPC allows id null for undetectable ids).
       respond(null, {
@@ -526,7 +610,120 @@ export function serve({ stdin = process.stdin, stdout = process.stdout } = {}) {
       respond(null, { jsonrpc: '2.0', id: null, error: { code: -32700, message: `parse error: ${error.message}` } });
       return;
     }
-    const response = handleRequest(request);
+    // §2.2: cancellation rides a NOTIFICATION, so it must be intercepted
+    // before the generic notifications/ suppression in handleRequest.
+    if (
+      request &&
+      typeof request === 'object' &&
+      request.method === 'notifications/cancelled'
+    ) {
+      const rid = request.params?.requestId;
+      const entry = entryFor(rid);
+      if (entry && !entry.settled) entry.controller.abort();
+      return;
+    }
+    // §2.2: concurrency cap — a monte_carlo call beyond the cap gets a
+    // PREDICTABLE in-band rejection instead of silently queueing minutes
+    // of work behind the runs already live.
+    // Non-object guard FIRST (bot sweep round 1, both reviewers): a valid
+    // JSON `null` parsed cleanly and crashed the dereference below before
+    // handleRequest's own invalid-request check could answer it.
+    if (!request || typeof request !== 'object') {
+      respond(null, { jsonrpc: '2.0', id: null, error: { code: -32600, message: 'invalid request: expected an object' } });
+      return;
+    }
+    const isMonteCarlo =
+      request.method === 'tools/call' &&
+      request.params?.name === 'monte_carlo';
+    if (isMonteCarlo && inflight.size >= maxConcurrent()) {
+      respond(request.id, {
+        jsonrpc: '2.0',
+        id: request.id,
+        result: errorResult(
+          `server busy: ${inflight.size} monte carlo calculation(s) in flight (PMO_MAX_CONCURRENT=${maxConcurrent()}); retry when they complete or cancel one`
+        )
+      });
+      return;
+    }
+    // §2.2: per-request context for monte_carlo — abort signal (wired to
+    // notifications/cancelled via the inflight map) and the progress
+    // notification emitter. Progress notifications join the SAME ordered
+    // write chain as responses (an inline stdout.write would overtake
+    // earlier responses — batch-6 round-sweep lesson) and are DROPPED
+    // under admission pressure: they are expendable, responses are not.
+    // Id-less (notification-style) monte carlo calls get a SYNTHETIC KEY
+    // OBJECT: Map keys by identity, and a plain object is unreachable from
+    // JSON-parsed request ids — a crafted `"#anon-1"` string id can never
+    // collide with, overwrite, or cancel a run it does not own (bot sweep
+    // round 2, cubic P1: the first draft reused a string key).
+    let context = null;
+    let inflightKey = null;
+    if (isMonteCarlo) {
+      inflightKey =
+        request.id !== undefined && request.id !== null
+          ? request.id
+          : { synthetic: 'anon-monte-carlo' };
+      const controller = new AbortController();
+      const progressToken = request.params?._meta?.progressToken;
+      context = {
+        signal: controller.signal,
+        progressToken,
+        emitProgress: (progress, total) => {
+          if (pending >= MAX_PENDING) return;
+          pending++;
+          tail = tail.then(() =>
+            writeResponse({
+              jsonrpc: '2.0',
+              method: 'notifications/progress',
+              params: { progressToken, progress, total }
+            })
+          );
+        }
+      };
+      inflight.set(inflightKey, { controller, settled: false });
+    }
+    const releaseInflight = () => {
+      if (inflightKey !== null && inflight.has(inflightKey)) {
+        const entry = inflight.get(inflightKey);
+        entry.settled = true;
+        inflight.delete(inflightKey);
+      }
+    };
+    const response = handleRequest(request, HANDLERS, context);
+    if (response && typeof response.then === 'function') {
+      const rid = request.id;
+      const tracked = response.then(
+        (res) => {
+          releaseInflight();
+          respond(rid, res);
+        },
+        (error) => {
+          releaseInflight();
+          // MCP cancellation contract: the receiver SHOULD NOT send a
+          // response for a cancelled request — the client asked to stop.
+          if (error instanceof MonteCarloCancelledError) return;
+          console.error(`pocketpmo-mcp: internal error in tool '${request.params?.name}':`, error);
+          respond(rid, {
+            jsonrpc: '2.0',
+            id: rid,
+            result: errorResult('internal tool error; see server logs')
+          });
+        }
+      );
+      // Remove-after-settle keeps the set bounded on a long-lived server;
+      // the allSettled snapshot at close time only needs UNSETTLED entries.
+      const trackedFinal = tracked.finally(() => {
+        asyncSettlers.delete(trackedFinal);
+      });
+      asyncSettlers.add(trackedFinal);
+      return;
+    }
+    // Sync-settled tracked requests (e.g. monte_carlo on a missing project
+    // throws a DomainError that handleRequest converts in-band) MUST
+    // release their slot here — otherwise two bad calls exhaust the
+    // concurrency cap for the server's lifetime (bot sweep round 1, both
+    // reviewers).
+    releaseInflight();
     if (response === null) return;
     respond(response.id, response);
   });
@@ -539,7 +736,16 @@ export function serve({ stdin = process.stdin, stdout = process.stdout } = {}) {
   let inputClosed = false;
   rl.on('close', () => {
     inputClosed = true;
-    tail.catch(() => {}).then(() => rl.emit('drained'));
+    // Async monte carlo dispatches settle AFTER the sync tail has drained:
+    // the exit path must wait for those settlers, then for the responses
+    // they enqueue, or a direct-run exit truncates every in-flight result
+    // (bot sweep round 1, cubic P1 — same failure class as the batch-5
+    // exit-truncation bug this await originally fixed).
+    tail
+      .catch(() => {})
+      .then(() => Promise.allSettled([...asyncSettlers]))
+      .then(() => tail.catch(() => {}))
+      .then(() => rl.emit('drained'));
   });
   return rl;
 }

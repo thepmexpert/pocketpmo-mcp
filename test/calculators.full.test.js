@@ -2,9 +2,12 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   cpmNetwork,
+  cpmNetworkFast,
+  MonteCarloCancelledError,
   makeRng,
   buildDistributions,
   runMonteCarlo,
+  runMonteCarloAsync,
   evmMetrics,
   validateActivities,
   validDuration
@@ -1197,4 +1200,166 @@ test('review §6.2: negative normal mean is repaired to the duration default and
     `negative-mean issue must be reported, got: ${JSON.stringify(r.issues ?? null)}`
   );
   assert.ok(r.mean > 2, `sampled mean must track the duration default (3), got ${r.mean}`);
+});
+
+// ---------------------------------------------------------------------------
+// External review batch 2 (§2.2 responsiveness/cancellation, §2.3 fast path)
+// ---------------------------------------------------------------------------
+
+// §2.3 equivalence contract: for clean DAGs the fast path must produce
+// BYTE-IDENTICAL output to cpmNetwork — including zero-duration tie
+// ordering (the stable byEfDesc sort quirk) and invalid-duration entries.
+// Randomized corpus with a seeded LCG: chains, wide fans, diamonds,
+// disconnected components, zero/ fractional / invalid durations.
+test('review §2.3: cpmNetworkFast is byte-identical to cpmNetwork on random DAGs', () => {
+  const rng = makeRng(20260925);
+  const rand = (n) => Math.floor(rng() * n);
+  const DURATIONS = [0, 0.5, 1, 2, 3, 7, NaN];
+  let dagCount = 0;
+  // Predecessor edges point strictly backward => acyclic by construction.
+  // Durations include 0 (tie ordering in the backward sort), fractions and
+  // NaN (invalid -> coerced to 0 by the shared validity rule). rand(4)
+  // allows ZERO parents => the corpus also contains disconnected
+  // components (cubic round 1: the old 1+rand(3) floor made that claim
+  // false).
+  for (let t = 0; t < 40; t++) {
+    const n = 2 + rand(25);
+    const acts = Array.from({ length: n }, (_, i) => ({
+      id: `n${i}`,
+      duration: DURATIONS[rand(DURATIONS.length)],
+      predecessors: [],
+    }));
+    for (let j = 1; j < n; j++) {
+      const parents = rand(4);
+      for (let k = 0; k < parents; k++) {
+        const p = rand(j); // strictly earlier node => acyclic
+        if (!acts[j].predecessors.includes(`n${p}`)) acts[j].predecessors.push(`n${p}`);
+      }
+    }
+    dagCount++;
+    const net = cpmNetwork(acts);
+    const fast = cpmNetworkFast(acts);
+    assert.ok(fast, `graph ${t} must be fast-path eligible`);
+    assert.equal(
+      JSON.stringify(net),
+      JSON.stringify(fast),
+      `graph ${t} (n=${n}) diverged`
+    );
+  }
+  assert.ok(dagCount >= 40);
+});
+
+// §2.3 guard: cycles and duplicate ids are NOT fast-path eligible — those
+// fall back to cpmNetwork per iteration, preserving its exact semantics.
+test('review §2.3: cpmNetworkFast declines cyclic and duplicate-id networks', () => {
+  assert.equal(
+    cpmNetworkFast([
+      { id: 'a', duration: 1, predecessors: ['b'] },
+      { id: 'b', duration: 1, predecessors: ['a'] },
+    ]),
+    null,
+    'cycle must not take the fast path'
+  );
+  assert.equal(
+    cpmNetworkFast([
+      { id: 'd', duration: 1, predecessors: [] },
+      { id: 'd', duration: 2, predecessors: [] },
+    ]),
+    null,
+    'duplicate ids must not take the fast path'
+  );
+});
+
+// §2.2: the async entry point produces IDENTICAL results to the sync one
+// for the same seed — same preamble, same stepper, same finalize.
+test('review §2.2: runMonteCarloAsync is byte-identical to runMonteCarlo (same seed)', async () => {
+  const acts = [
+    { id: 'r', duration: 2, predecessors: [] },
+    { id: 'a', duration: 3, distribution: { type: 'triangular', optimistic: 2, mostLikely: 3, pessimistic: 5 }, predecessors: ['r'] },
+    { id: 'b', duration: 1, predecessors: ['r'] },
+    { id: 'c', duration: 4, type: 'normal', distribution: { type: 'normal', mean: 4, stdDev: 1 }, predecessors: ['a', 'b'] },
+  ];
+  const sync = runMonteCarlo({ activities: acts, iterations: 800, rng: makeRng(42), targets: [5, 8] });
+  const async = await runMonteCarloAsync({ activities: acts, iterations: 800, rng: makeRng(42), targets: [5, 8] });
+  assert.equal(JSON.stringify(sync), JSON.stringify(async), 'async must match sync byte-for-byte');
+});
+
+// §2.2: cancellation is deterministic — a pre-aborted signal rejects (after
+// exactly one step), and an in-flight abort rides onProgress without timing
+// races.
+test('review §2.2: runMonteCarloAsync honours AbortSignal cancellation', async () => {
+  const acts = [
+    { id: 'x', duration: 2, predecessors: [] },
+    { id: 'y', duration: 3, predecessors: ['x'] },
+  ];
+  const preAborted = new AbortController();
+  preAborted.abort();
+  await assert.rejects(
+    () => runMonteCarloAsync({ activities: acts, iterations: 1000, rng: makeRng(1), signal: preAborted.signal }),
+    (err) => err instanceof MonteCarloCancelledError
+  );
+
+  const mid = new AbortController();
+  const seen = [];
+  await assert.rejects(
+    () =>
+      runMonteCarloAsync({
+        activities: acts,
+        iterations: 5000,
+        rng: makeRng(1),
+        signal: mid.signal,
+        onProgress: (progress, total) => {
+          seen.push([progress, total]);
+          if (progress >= 100) mid.abort();
+        },
+      }),
+    (err) => err instanceof MonteCarloCancelledError
+  );
+  assert.ok(seen.length > 0, 'progress must have been reported before cancellation');
+  const [lastProgress, lastTotal] = seen[seen.length - 1];
+  assert.equal(lastTotal, 5000);
+  // Progress is 1-based (completed iterations); progressEvery = 5000/100 =
+  // 50, so reports land at 1, 51, 101 — the first >= 100 is 101.
+  assert.equal(lastProgress, 101, 'cancellation must land at the deterministic abort point');
+  for (let i = 1; i < seen.length; i++) {
+    assert.ok(seen[i][0] > seen[i - 1][0], 'progress must be monotone');
+  }
+});
+
+// Bot sweep round 1 (cubic P1 + CodeRabbit convergence): reused fast-path
+// states must never leak stale ls across iterations. The fixture needs a
+// SAMPLED zero on the successor — a degenerate normal (mean 0, stdDev 0)
+// returns 0 every iteration, so ef(pred) === ef(succ) every iteration, the
+// stable byEfDesc sort processes pred FIRST, and cpmNetwork's fresh clone
+// reads succ.ls as undefined -> the maxEF fallback. With reused states,
+// succ's STALE ls from iteration N-1 replaced that fallback and corrupted
+// pred's float from iteration 2 onward (verified pre-fix: pred share < 1).
+test('bot sweep r1: fast-path state reuse never leaks stale ls into criticality', () => {
+  const acts = [
+    { id: 'pred', duration: 3, predecessors: [] },
+    {
+      id: 'succ',
+      duration: 3,
+      // Sampled duration is EXACTLY 0 every iteration (degenerate).
+      distribution: { type: 'normal', mean: 0, stdDev: 0 },
+      predecessors: ['pred'],
+    },
+  ];
+  const r = runMonteCarlo({ activities: acts, iterations: 200, rng: makeRng(42) });
+  const pred = r.criticalActivityFrequency.find((e) => e.id === 'pred');
+  assert.ok(pred, 'pred must appear in criticality shares');
+  assert.equal(pred.share, 1, `pred is critical every iteration under fresh semantics, got share ${pred?.share}`);
+});
+
+// Bot sweep round 1 (cubic P2): a degenerate yieldEvery (0, NaN, negative)
+// would disable every event-loop yield (i % 0 is NaN) — normalize, don't
+// crash or starve. Results stay identical to the sync engine.
+test('bot sweep r1: invalid yieldEvery is normalized, results still match sync', async () => {
+  const acts = [
+    { id: 'x', duration: 2, predecessors: [] },
+    { id: 'y', duration: 3, predecessors: ['x'] },
+  ];
+  const sync = runMonteCarlo({ activities: acts, iterations: 120, rng: makeRng(9) });
+  const async = await runMonteCarloAsync({ activities: acts, iterations: 120, rng: makeRng(9), yieldEvery: 0 });
+  assert.equal(JSON.stringify(sync), JSON.stringify(async), 'degenerate yieldEvery must not change results');
 });
