@@ -1,0 +1,18 @@
+server.js
+  h_bb77324e13b22c 399,404,413-427,463-467,469
+test/projects.test.js
+  h_bb77324e13b22c 309-312
+test/server.test.js
+  h_bb77324e13b22c 272-277,295-299,348-352,354-357,362-365,368-369,386-427
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "17df4129e3ba6acae9e26ffee4be48d87a7a4291",
+  "prompts": {},
+  "humans": {
+    "h_bb77324e13b22c": {
+      "author": "David <david4david4david4@gmail.com>"
+    }
+  }
+}
