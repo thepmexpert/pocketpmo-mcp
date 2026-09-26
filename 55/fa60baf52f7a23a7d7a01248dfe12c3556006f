@@ -1,0 +1,14 @@
+.rafter.yml
+  h_bb77324e13b22c 12-14
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "55fa60baf52f7a23a7d7a01248dfe12c3556006f",
+  "prompts": {},
+  "humans": {
+    "h_bb77324e13b22c": {
+      "author": "David <david4david4david4@gmail.com>"
+    }
+  }
+}
