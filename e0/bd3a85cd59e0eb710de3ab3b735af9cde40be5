@@ -1,0 +1,14 @@
+test/server.test.js
+  h_bb77324e13b22c 439-441
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "e0bd3a85cd59e0eb710de3ab3b735af9cde40be5",
+  "prompts": {},
+  "humans": {
+    "h_bb77324e13b22c": {
+      "author": "David <david4david4david4@gmail.com>"
+    }
+  }
+}
