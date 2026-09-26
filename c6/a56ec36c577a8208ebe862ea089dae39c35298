@@ -1,0 +1,18 @@
+README.md
+  h_bb77324e13b22c 19,114
+lib/projects.js
+  h_bb77324e13b22c 2,7,9-41,49-55,63-72,78-81,85,89-117,135,141,145,149,172,178,183,195,218-226,232,235,239-240,244-267,270,289-295,298,300-302,306-312,314,317-324,327-329,332,334-347
+test/projects.test.js
+  h_bb77324e13b22c 7-15,331-566
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "c6a56ec36c577a8208ebe862ea089dae39c35298",
+  "prompts": {},
+  "humans": {
+    "h_bb77324e13b22c": {
+      "author": "David <david4david4david4@gmail.com>"
+    }
+  }
+}
