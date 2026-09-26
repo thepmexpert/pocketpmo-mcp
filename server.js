@@ -21,10 +21,12 @@ import {
   evmMetrics,
   validateActivities,
   validDuration,
+  effectivePertTriple,
   validPertOrdering,
   round2
 } from './lib/calculators.js';
-import { listProjects, getProject, projectsDir } from './lib/projects.js';
+import { createPortfolioFold } from './lib/portfolio.js';
+import { loadAllProjects, listProjects, getProject, projectsDir } from './lib/projects.js';
 
 const SERVER_INFO = { name: 'pocketpmo-mcp', version: '0.1.0' };
 const PROTOCOL_VERSION = '2025-06-18';
@@ -151,6 +153,21 @@ const TOOLS = [
     }
   },
   {
+    name: 'portfolio_rollup',
+    description:
+      'Cross-project roll-up over ALL projects in the projects directory: per-project and portfolio PERT totals (raw sums rounded once at the boundary; activity/project durations assumed independent) and EVM aggregates (EV/AC/PV summed; portfolio CPI/SPI computed from the sums, never averaged from project indices). PERT + EVM only — no Monte Carlo. Projects that fail to load or carry no activities/EVM data are skipped and reported, never silently dropped. Declared SS/FF/lag dependency semantics are counted per project and modeled as finish-to-start.',
+    annotations: READ_ONLY_ANNOTATIONS,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        statusDate: {
+          type: 'string',
+          description: 'As-of date for EVM calculations (YYYY-MM-DD); default: today'
+        }
+      }
+    }
+  },
+  {
     name: 'risk_register',
     description:
       'Project risks scored by probability x impact, ranked highest first.',
@@ -225,9 +242,8 @@ const HANDLERS = {
     const issues = [];
     if (!acts.length) throw new DomainError(`project '${args.project}' has no activities`);
     const detailed = acts.map((a) => {
-      const o = a.distribution?.optimistic ?? (a.duration ?? NaN) * 0.7;
-      const m = a.distribution?.mostLikely ?? a.duration ?? NaN;
-      const pe = a.distribution?.pessimistic ?? (a.duration ?? NaN) * 1.5;
+      // Single-source derivation shared with the portfolio roll-up.
+      const { o, m, pe } = effectivePertTriple(a);
       if (
         !validDuration(a.duration) &&
         !(a.distribution && typeof a.distribution.mostLikely === 'number')
@@ -370,6 +386,90 @@ const HANDLERS = {
       statusDate: args.statusDate ?? new Date().toISOString().slice(0, 10)
     });
     return { project: p.name, ...result, read_only: true };
+  },
+
+  portfolio_rollup(args) {
+    // STREAMING + ONE scan (round-1/2 bot findings): rows fold one project
+    // at a time via loadAllProjects — parsed bodies are never retained
+    // (forEachEntry hands out the cache's own evictable objects; collecting
+    // them re-peaks memory past the caps), there is no id-or-name
+    // re-resolution (a project NAMED like another's id could steal its
+    // row), and no per-project rescans (quadratic syscalls).
+    const fold = createPortfolioFold({ statusDate: args.statusDate ?? undefined });
+    const seen = new Set();
+    const loadSkipped = [];
+    const { count, skippedFiles, failedFiles, warnings, fatal } = loadAllProjects((project, file) => {
+      // Identity key = TAGGED id/file namespace, never the name (cubic
+      // round 3 + CR round 4): untagged `project.id ?? file` let a project
+      // with id 'y.json' collide with the name-only project in file
+      // y.json. Distinct key namespaces keep them distinct; the loader
+      // deliberately accepts distinct files that share a name.
+      let key;
+      let label;
+      try {
+        if (project.id !== null && project.id !== undefined) {
+          const rendered = String(project.id);
+          key = `id:${rendered}`;
+          label = typeof project.id === 'string' || typeof project.id === 'number' ? rendered : file;
+        } else {
+          key = `file:${file}`;
+          label = file;
+        }
+      } catch {
+        key = `file:${file}`;
+        label = file;
+      }
+      if (seen.has(key)) {
+        // Duplicate ids across files: first occurrence analyzed, later ones
+        // reported — first-match-wins must not double-count a project.
+        loadSkipped.push({
+          project: label,
+          file,
+          reason: 'duplicate id; first occurrence analyzed'
+        });
+        return;
+      }
+      // Reserve the key only AFTER a successful add (CR + cubic round 5,
+      // converged): if fold.add throws, loadAllProjects records the file in
+      // failedFiles — and a LATER valid file with the same id must still be
+      // analyzed instead of being skipped as a duplicate of a project that
+      // was never analyzed.
+      fold.add(project);
+      seen.add(key);
+    });
+    if (fatal) {
+      // An unreadable directory is NOT an empty one — pass the lib's own
+      // generic diagnostic through instead of misreporting it.
+      throw new DomainError(fatal);
+    }
+    if (!count) {
+      // Generic prefix (pin-stable) + bounded, accurately-labeled WHY:
+      // cap at 3 per class, overflow points at list_projects, paths stay
+      // server-side. Parse failures and internal analysis failures get
+      // separate, accurate labels (cubic round 4).
+      const cap = (files) => {
+        const shown = files.slice(0, 3).join(', ');
+        const rest = files.length - 3;
+        return `${shown}${rest > 0 ? ` (+${rest} more; full list via list_projects)` : ''}`;
+      };
+      const parts = [];
+      if (skippedFiles.length) {
+        parts.push(`files skipped (invalid or unreadable): ${cap(skippedFiles)}`);
+      }
+      if (failedFiles.length) {
+        parts.push(`files not analyzed (internal error): ${cap(failedFiles)}`);
+      }
+      throw new DomainError(
+        `no project files in the configured projects directory${parts.length ? `; ${parts.join('; ')}` : ''}`
+      );
+    }
+    return {
+      ...fold.result(),
+      projectCount: count,
+      warnings,
+      loadSkipped,
+      read_only: true
+    };
   },
 
   risk_register(args) {
