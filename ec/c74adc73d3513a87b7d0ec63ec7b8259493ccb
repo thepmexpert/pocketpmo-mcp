@@ -1,0 +1,29 @@
+lib/pulse/render-ritual.js
+  s_67d0ced5cb2344::t_05308e43560233 82-85,87-88
+lib/pulse/ritual.js
+  s_67d0ced5cb2344::t_632f1fe4a858f8 191,202
+  s_67d0ced5cb2344::t_52ff769723eada 147-158
+test/ritual.test.js
+  s_67d0ced5cb2344::t_0eb633372afd38 393-413
+  s_67d0ced5cb2344::t_c102b20cc15186 322
+  s_67d0ced5cb2344::t_6e20d7d601273c 233-254
+  s_67d0ced5cb2344::t_8fc362c8a8d7f3 319-320
+  s_67d0ced5cb2344::t_549134d5ef7d93 425
+  s_67d0ced5cb2344::t_a9688555b9a240 461-471
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "ecc74adc73d3513a87b7d0ec63ec7b8259493ccb",
+  "prompts": {},
+  "sessions": {
+    "s_67d0ced5cb2344": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f12679034ffeRQhYzlWfys9wFd",
+        "model": "glm-5.3-flash"
+      },
+      "human_author": "David <david4david4david4@gmail.com>"
+    }
+  }
+}

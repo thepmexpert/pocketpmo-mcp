@@ -1,0 +1,21 @@
+lib/pulse/render-ritual.js
+  s_99ff1e598de7a1::t_bbe457984980ec 66-76
+test/ritual.test.js
+  s_99ff1e598de7a1::t_0ce21e95b7c081 290-307
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "804b92ac82e08f6b4f8a387b19f09e481049dccf",
+  "prompts": {},
+  "sessions": {
+    "s_99ff1e598de7a1": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f128b04caffeAKLRKknODsIjZW",
+        "model": "glm-5.3-flash"
+      },
+      "human_author": "David <david4david4david4@gmail.com>"
+    }
+  }
+}
