@@ -659,9 +659,13 @@ describe('provider send gate', () => {
     assert.equal(SEND_TIMEOUT_MS, 15000);
   });
 
-  test('resolveProvider: default postmark; only exact agentmail selects AgentMail', () => {    assert.equal(resolveProvider({}), 'postmark');
+  test('resolveProvider: default postmark; only exact agentmail/postmark valid; unknown -> invalid', () => {
+    assert.equal(resolveProvider({}), 'postmark');
+    assert.equal(resolveProvider({ PULSE_PROVIDER: '' }), 'postmark'); // empty treated as unset
     assert.equal(resolveProvider({ PULSE_PROVIDER: 'postmark' }), 'postmark');
-    assert.equal(resolveProvider({ PULSE_PROVIDER: 'postmakr' }), 'postmark'); // typo fails toward dry-run, not a crash
+    assert.equal(resolveProvider({ PULSE_PROVIDER: 'postmakr' }), 'invalid'); // typo -> explicit invalid, not silent postmark
+    assert.equal(resolveProvider({ PULSE_PROVIDER: 'AGENTMAIL' }), 'invalid'); // wrong case -> invalid
+    assert.equal(resolveProvider({ PULSE_PROVIDER: 'garbage' }), 'invalid');
     assert.equal(resolveProvider({ PULSE_PROVIDER: 'agentmail' }), 'agentmail');
   });
 
@@ -672,6 +676,14 @@ describe('provider send gate', () => {
     assert.equal(isSendEnabled({ PULSE_SEND: '1', PULSE_PROVIDER: 'agentmail', AGENTMAIL_API_KEY: 'k', AGENTMAIL_INBOX_ID: 'i' }), true);
     // provider default unchanged: postmark token still gates
     assert.equal(isSendEnabled({ PULSE_SEND: '1', AGENTMAIL_API_KEY: 'k', AGENTMAIL_INBOX_ID: 'i' }), false);
+  });
+
+  test('unknown PULSE_PROVIDER keeps the gate closed even with POSTMARK_SERVER_TOKEN present (PR #20 R2)', () => {
+    assert.equal(isSendEnabled({ PULSE_SEND: '1', PULSE_PROVIDER: 'postmakr', POSTMARK_SERVER_TOKEN: 'tok' }), false);
+    assert.equal(isSendEnabled({ PULSE_SEND: '1', PULSE_PROVIDER: 'AGENTMAIL', POSTMARK_SERVER_TOKEN: 'tok' }), false);
+    assert.equal(isSendEnabled({ PULSE_SEND: '1', PULSE_PROVIDER: 'garbage', POSTMARK_SERVER_TOKEN: 'tok' }), false);
+    // explicit postmark still opens with a token
+    assert.equal(isSendEnabled({ PULSE_SEND: '1', PULSE_PROVIDER: 'postmark', POSTMARK_SERVER_TOKEN: 'tok' }), true);
   });
 
   test('sendViaAgentmail posts to the inbox send endpoint with bearer auth and digest body', async () => {

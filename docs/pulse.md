@@ -39,7 +39,7 @@ default `postmark` — see `lib/pulse/provider.js`).
 | `PULSE_TZ` | host local | IANA zone for the run's calendar day — the cadence guard, date labels, dry-run folders, and overdue-day math all read THIS calendar (not UTC), because the crontab fires in host-local time. Pin it (e.g. `Europe/Dublin`) so behavior survives host tz changes; an invalid value warns and falls back to host local. |
 | `PULSE_FORCE` | _(unset)_ | Must be exactly `1` to bypass the weekday/cadence guard (staging tests only); e.g. `0` does NOT bypass. |
 | `PULSE_SEND` | _(unset)_ | Must be exactly `1` to enable real sends. |
-| `PULSE_PROVIDER` | `postmark` | `agentmail` or `postmark`. Unknown values select postmark, whose missing credentials keep the gate closed (misconfiguration fails toward dry-run). |
+| `PULSE_PROVIDER` | `postmark` | `agentmail` or `postmark`. Any other explicit value is invalid: it keeps the send gate closed (dry-run) even if a postmark token is present — misconfiguration fails toward dry-run. |
 | `AGENTMAIL_API_KEY` | _(none)_ | AgentMail API key (used when `PULSE_PROVIDER=agentmail`). **Secret**: system keychain / Paperclip secret proposal; never committed. |
 | `AGENTMAIL_INBOX_ID` | _(none)_ | Sending AgentMail inbox id, e.g. `pocketpmo-pulse@agentmail.to`. **Secret-adjacent config**; provisioned with the key. |
 | `POSTMARK_SERVER_TOKEN` | _(none)_ | Postmark server token (default provider). **Secret**: issued via a Paperclip secret proposal; never committed to git, `.env` files, or docs. |

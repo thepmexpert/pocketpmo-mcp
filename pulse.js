@@ -112,7 +112,8 @@ async function deliver(ctx, subscriber, digest) {
     return { action: 'dry-run', result };
   }
   const from = `${ctx.fromName} <${ctx.fromEmail}>`;
-  const result = resolveProvider(process.env) === 'agentmail'
+  const provider = resolveProvider(process.env);
+  const result = provider === 'agentmail'
     ? await sendViaAgentmail({
         apiKey: process.env.AGENTMAIL_API_KEY,
         inboxId: process.env.AGENTMAIL_INBOX_ID,
@@ -122,14 +123,16 @@ async function deliver(ctx, subscriber, digest) {
         html: digest.html,
         text: digest.text
       })
-    : await sendViaPostmark({
-        token: process.env.POSTMARK_SERVER_TOKEN,
-        from,
-        to: subscriber.email,
-        subject: digest.subject,
-        html: digest.html,
-        text: digest.text
-      });
+    : provider === 'postmark'
+      ? await sendViaPostmark({
+          token: process.env.POSTMARK_SERVER_TOKEN,
+          from,
+          to: subscriber.email,
+          subject: digest.subject,
+          html: digest.html,
+          text: digest.text
+        })
+      : { ok: false, error: 'invalid PULSE_PROVIDER: unknown value keeps the gate closed' };
   return { action: 'send', result };
 }
 
