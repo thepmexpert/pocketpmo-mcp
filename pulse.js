@@ -17,11 +17,16 @@
  *
  * Cadence guard (defense in depth for cron misconfig): "daily" subscribers
  * are served Mon–Fri only, "weekly" subscribers on Mondays. PULSE_FORCE=1
- * overrides for staging tests. Never crashes on bad project data (the
- * pocketpmo-mcp convention): malformed projects and per-subscriber errors
- * are warnings; exit code is 0 with a JSON summary on stdout. Exit 1 is
- * reserved for "no run was possible" (roster unreadable / unexpected
- * top-level error) so cron observability catches a dead pipeline.
+ * overrides for staging tests. The guard — and every date label, the
+ * dry-run folder, and overdue-day math — reads ONE calendar day: the
+ * PULSE_TZ day when set (IANA name), else the host's local day, because
+ * the documented crontab fires in host-local time (lib/pulse/calendar.js
+ * re-keys `now` onto that calendar; cubic PR #20 R2). Never crashes on
+ * bad project data (the pocketpmo-mcp convention): malformed projects and
+ * per-subscriber errors are warnings; exit code is 0 with a JSON summary
+ * on stdout. Exit 1 is reserved for "no run was possible" (roster
+ * unreadable / unexpected top-level error) so cron observability catches
+ * a dead pipeline.
  *
  * Scheduler (CTO decision, recorded in docs/pulse.md): host launchd/cron
  * on the Mac Mini — the slack-bridge / trello-sync precedent. This is a
@@ -32,6 +37,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { loadAllProjects, projectsDir } from './lib/projects.js';
 import { loadSubscriptions } from './lib/pulse/subscriptions.js';
+import { resolvePulseTimeZone, calendarAnchor } from './lib/pulse/calendar.js';
 import { buildDigestItems, MAX_ITEMS, MAX_CHASES } from './lib/pulse/needs.js';
 import { renderDigest } from './lib/pulse/render.js';
 import { isSendEnabled, resolveProvider, sendViaPostmark, sendViaAgentmail, writeDryRun } from './lib/pulse/provider.js';
@@ -80,9 +86,12 @@ function collectProjects() {
   return { projects, load };
 }
 
-function buildContext(now) {
+function buildContext(now, generatedAt) {
   return {
     now,
+    // The REAL generation instant (dry-run .json meta) — distinct from the
+    // calendar-anchored `now` the labels and day math read.
+    generatedAt,
     fromName: envDefault('PULSE_FROM_NAME', 'PocketPMO Pulse'),
     fromEmail: envDefault('PULSE_FROM_EMAIL', 'pulse@pocketpmo.com'),
     unsubscribeUrl: envDefault('PULSE_UNSUBSCRIBE_URL', ''),
@@ -96,6 +105,7 @@ async function deliver(ctx, subscriber, digest) {
     const result = writeDryRun({
       outDir: ctx.outDir,
       now: ctx.now,
+      generatedAt: ctx.generatedAt,
       subscriber,
       digest
     });
@@ -149,11 +159,19 @@ export async function runPulse(env = process.env) {
 }
 
 async function pulseBody(env) {
-  const now = (() => {
+  const tz = resolvePulseTimeZone(env);
+  if (tz.warning) log(tz.warning);
+  const nowReal = (() => {
     const override = env.PULSE_DATE ? new Date(env.PULSE_DATE) : new Date();
     return Number.isNaN(override.getTime()) ? new Date() : override;
   })();
-  const ctx = buildContext(now);
+  // ONE calendar day for the whole run (cubic PR #20 R2): the documented
+  // crontab fires host-local, so the cadence guard, date labels, dry-run
+  // folder, and overdue-day math must all read the PULSE_TZ (default
+  // host-local) calendar — not UTC. calendarAnchor re-keys `now` onto that
+  // calendar; calendarWeekday/labels/day-math downstream then agree.
+  const now = calendarAnchor(nowReal, tz.timeZone);
+  const ctx = buildContext(now, nowReal);
   const subscriptionsPath = path.resolve(
     env.PULSE_SUBSCRIPTIONS || 'subscriptions.json'
   );
@@ -182,6 +200,7 @@ async function pulseBody(env) {
     errors: [],
     warnings: [...roster.warnings]
   };
+  if (tz.warning) summary.warnings.push(tz.warning);
 
   // Lazy + cached (CodeRabbit PR #20 R1): the portfolio is scanned once,
   // on the FIRST due subscriber. Skipped-only runs (weekend, weekly

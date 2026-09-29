@@ -36,6 +36,7 @@ default `postmark` — see `lib/pulse/provider.js`).
 | `PULSE_FROM_EMAIL` | `pulse@pocketpmo.com` | Sender address — with AgentMail it rides as Reply-To (envelope-from is the inbox); with Postmark it is the envelope From and must be SPF/DKIM-aligned. |
 | `PULSE_UNSUBSCRIBE_URL` | _(none)_ | Optional https unsubscribe link; without it the footer asks for a `UNSUBSCRIBE` reply. |
 | `PULSE_DATE` | now | Override "today" (ISO); used by tests and manual replays. |
+| `PULSE_TZ` | host local | IANA zone for the run's calendar day — the cadence guard, date labels, dry-run folders, and overdue-day math all read THIS calendar (not UTC), because the crontab fires in host-local time. Pin it (e.g. `Europe/Dublin`) so behavior survives host tz changes; an invalid value warns and falls back to host local. |
 | `PULSE_FORCE` | _(unset)_ | `1` bypasses the weekday/cadence guard (staging tests only). |
 | `PULSE_SEND` | _(unset)_ | Must be exactly `1` to enable real sends. |
 | `PULSE_PROVIDER` | `postmark` | `agentmail` or `postmark`. Unknown values select postmark, whose missing credentials keep the gate closed (misconfiguration fails toward dry-run). |
@@ -58,6 +59,8 @@ default `postmark` — see `lib/pulse/provider.js`).
   exports feed the digest (empty/missing = all projects).
 - `cadence`: `daily` (served Mon–Fri) or `weekly` (served Mondays).
   The worker enforces this itself — a cron misconfig cannot spam weekends.
+  The weekday guard reads the `PULSE_TZ` (default host-local) calendar
+  day, matching the crontab's clock — see `lib/pulse/calendar.js`.
 
 ## What counts as "needs you" (ranking rule)
 
@@ -90,11 +93,12 @@ monitor, and logs go to the host's usual capture. Suggested crontab (06:30
 Mon–Fri local):
 
 ```
-30 6 * * 1-5  cd /path/to/pocketpmo-mcp && /usr/bin/env PMO_PROJECTS_DIR=/path/to/data PULSE_SUBSCRIPTIONS=/path/to/subscriptions.json PULSE_SEND=1 PULSE_PROVIDER=agentmail AGENTMAIL_API_KEY="$PULSE_AGENTMAIL_KEY" AGENTMAIL_INBOX_ID="pocketpmo-pulse@agentmail.to" node pulse.js >> /var/log/pocketpmo-pulse.log 2>&1
+30 6 * * 1-5  cd /path/to/pocketpmo-mcp && /usr/bin/env PMO_PROJECTS_DIR=/path/to/data PULSE_SUBSCRIPTIONS=/path/to/subscriptions.json PULSE_SEND=1 PULSE_PROVIDER=agentmail PULSE_TZ=Europe/Dublin AGENTMAIL_API_KEY="$PULSE_AGENTMAIL_KEY" AGENTMAIL_INBOX_ID="pocketpmo-pulse@agentmail.to" node pulse.js >> /var/log/pocketpmo-pulse.log 2>&1
 ```
 
 (Feed the credentials from a root-owned environment file or `launchd`
-`EnvironmentVariables`, not from this repo.)
+`EnvironmentVariables`, not from this repo. Pin `PULSE_TZ` to the zone the
+cron schedule actually means — the guard and all date labels follow it.)
 
 ## Provider (CTO decision): selectable — AgentMail (staging) / Postmark (prod candidate)
 
@@ -149,4 +153,6 @@ Coverage: subscriptions loading (invalid/duplicate/malformed), ranking and
 selection, empty state, malformed-project fail-soft, HTML/text rendering
 (escapes, unsubscribe line, sender identity), the provider-aware dry-run/
 send gate, the Postmark and AgentMail clients against a fake fetch, cadence
-guard, and an end-to-end `runPulse` dry run over `data/sample-project.json`.
+guard, the `PULSE_TZ` calendar anchoring (guard/labels/folders/overdue math
+on one calendar), and an end-to-end `runPulse` dry run over
+`data/sample-project.json`.

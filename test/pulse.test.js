@@ -24,6 +24,7 @@ import {
   AGENTMAIL_URL
 } from '../lib/pulse/provider.js';
 import { runPulse, cadenceDue } from '../pulse.js';
+import { resolvePulseTimeZone, calendarWeekday, calendarAnchor } from '../lib/pulse/calendar.js';
 
 // Temp-dir discipline matching test/projects.test.js: register before use,
 // one cleanup hook, one stubborn dir never aborts the suite.
@@ -708,6 +709,39 @@ describe('cadenceDue', () => {
   assert.equal(cadenceDue(undefined, monday), true);
 });
 
+// ---------------------------------------------------------------------------
+// calendar.js — PULSE_TZ calendar day (cubic PR #20 R2)
+// ---------------------------------------------------------------------------
+
+describe('pulse calendar (PULSE_TZ)', () => {
+  // 2026-10-04T20:30:00Z is Sunday in UTC but Monday 09:30 in
+  // Pacific/Auckland (NZDT, UTC+13) — the exact drift class from the R2
+  // review: a UTC-keyed guard silently skips weekly subscribers on
+  // local Mondays east of UTC+6.5.
+  const utcSundayEvening = new Date('2026-10-04T20:30:00Z');
+
+  test('resolvePulseTimeZone: absent → host local, valid → zone, invalid → warn + host local', () => {
+    assert.deepEqual(resolvePulseTimeZone({}), { timeZone: undefined });
+    assert.deepEqual(resolvePulseTimeZone({ PULSE_TZ: '  ' }), { timeZone: undefined });
+    assert.deepEqual(resolvePulseTimeZone({ PULSE_TZ: 'Pacific/Auckland' }), { timeZone: 'Pacific/Auckland' });
+    const invalid = resolvePulseTimeZone({ PULSE_TZ: 'Mars/Olympus' });
+    assert.equal(invalid.timeZone, undefined);
+    assert.ok(invalid.warning.includes('Mars/Olympus'), invalid.warning);
+  });
+
+  test('calendarWeekday reads the CONFIGURED calendar, not UTC', () => {
+    assert.equal(calendarWeekday(utcSundayEvening, 'UTC'), 0);              // Sunday
+    assert.equal(calendarWeekday(utcSundayEvening, 'Pacific/Auckland'), 1); // Monday
+  });
+
+  test('calendarAnchor re-keys now onto the calendar day at UTC midnight', () => {
+    assert.equal(calendarAnchor(utcSundayEvening, 'UTC').toISOString(), '2026-10-04T00:00:00.000Z');
+    assert.equal(calendarAnchor(utcSundayEvening, 'Pacific/Auckland').toISOString(), '2026-10-05T00:00:00.000Z');
+    const invalid = new Date('not a date');
+    assert.equal(calendarAnchor(invalid, 'UTC'), invalid); // fail-soft: returned unchanged
+  });
+});
+
 describe('runPulse', () => {
   const repoRoot = path.resolve(path.dirname(decodeURIComponent(new URL(import.meta.url).pathname)), '..');
   const dataDir = path.join(repoRoot, 'data');
@@ -964,5 +998,44 @@ describe('runPulse', () => {
     assert.equal(summary.dryRun, true);
     assert.equal(summary.sent, 0);
     assert.ok(fs.existsSync(path.join(out, '2026-09-29', 'smoke%40x.io.html')));
+  });
+
+  test('PULSE_TZ: weekly subscriber due on the CONFIGURED calendar Monday, not the UTC one', async () => {
+    const dir = makeTempDir({
+      'subs.json': JSON.stringify({ subscribers: [{ email: 'x@y.io', cadence: 'weekly' }] })
+    });
+    // 2026-10-04T20:30:00Z is Sunday in UTC (the old UTC-keyed guard
+    // silently skipped weekly here) but Monday 09:30 in Pacific/Auckland
+    // (NZDT, UTC+13) — the exact drift class from the cubic R2 review.
+    const summary = await runPulse({
+      ...pulseEnv(dir),
+      PULSE_TZ: 'Pacific/Auckland',
+      PULSE_DATE: '2026-10-04T20:30:00Z',
+      PULSE_FORCE: ''
+    });
+    assert.equal(summary.skipped, 0);
+    assert.equal(summary.written, 3);
+    // Folder + rendered label land on the Auckland calendar day.
+    const dayDir = path.join(dir, 'out', '2026-10-05');
+    const files = fs.readdirSync(dayDir);
+    const html = fs.readFileSync(path.join(dayDir, files.find((f) => f.endsWith('.html'))), 'utf8');
+    assert.ok(html.includes('2026-10-05'));
+    // The real generation instant is preserved in the dry-run meta.
+    const meta = JSON.parse(fs.readFileSync(path.join(dayDir, files.find((f) => f.endsWith('.json'))), 'utf8'));
+    assert.equal(meta.generatedAt, '2026-10-04T20:30:00.000Z');
+  });
+
+  test('invalid PULSE_TZ warns and falls back to the host local calendar', async () => {
+    const dir = makeTempDir({ 'subs.json': '[{"email":"x@y.io"}]' });
+    const summary = await runPulse({
+      ...pulseEnv(dir),
+      PULSE_TZ: 'Mars/Olympus',
+      PULSE_FORCE: '1'
+    });
+    assert.equal(summary.ok, true);
+    assert.ok(summary.warnings.some((w) => w.includes('PULSE_TZ')), summary.warnings.join('\n'));
+    // Host-local fallback still lands the PULSE_DATE calendar day (09:00Z
+    // is same-day in every plausible host zone).
+    assert.ok(fs.existsSync(path.join(dir, 'out', '2026-09-29')));
   });
 });
