@@ -1,0 +1,19 @@
+test/pulse.test.js
+  s_fb9fffe255ed06::t_c5a042985ba4f4 454-477
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "e7e9e7761520e1cdc9f46e2ad11049721a519935",
+  "prompts": {},
+  "sessions": {
+    "s_fb9fffe255ed06": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f134b3e8bffeKLd86Rd0KKDR3p",
+        "model": "glm-5.3-flash"
+      },
+      "human_author": "David <david4david4david4@gmail.com>"
+    }
+  }
+}
