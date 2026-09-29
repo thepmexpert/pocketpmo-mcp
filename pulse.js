@@ -211,7 +211,11 @@ async function pulseBody(env) {
         // An unreadable projects directory is a portfolio-level failure:
         // every digest would be silently empty, which is worse than a
         // recorded error. Per-file malformed projects still degrade to
-        // warnings inside load (never fatal) — fail-soft holds.
+        // warnings inside load (never fatal) — fail-soft holds. R2 (P1):
+        // mark the summary failed before throwing so the run is observable
+        // (ok=false + exit 1) for cron even though the per-subscriber
+        // catch keeps recording errors for every due subscriber.
+        summary.ok = false;
         throw new Error(load.fatal);
       }
       const { items, chases } = buildDigestItems({ subscriber, projects, now });

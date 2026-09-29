@@ -325,6 +325,27 @@ describe('buildDigestItems', () => {
     assert.equal(chases[0].days, 9);
   });
 
+  test('chases derived from overdue open milestones owned by others', () => {
+    const projects = [
+      project({
+        evmData: {
+          milestones: [
+            { id: 'm1', name: 'Their late milestone', progress: 0.2, owner: 'Priya N.', dueDate: '2026-09-21' },
+            { id: 'm2', name: 'My late milestone', progress: 0.5, owner: 'D. Byrne', dueDate: '2026-09-21' },
+            { id: 'm3', name: 'Done late milestone', progress: 1, owner: 'Priya N.', dueDate: '2026-09-21' },
+            { id: 'm4', name: 'Closed late milestone', status: 'done', owner: 'Priya N.', dueDate: '2026-09-21' },
+            { id: 'm5', name: 'Not yet due milestone', progress: 0, owner: 'Priya N.', dueDate: '2026-10-21' }
+          ]
+        }
+      })
+    ];
+    const { chases } = buildDigestItems({ subscriber: BYRNE, projects, now: NOW });
+    assert.equal(chases.length, 1);
+    assert.equal(chases[0].who, 'Priya N.');
+    assert.equal(chases[0].what, 'Their late milestone');
+    assert.equal(chases[0].days, 8);
+  });
+
   test('fail-soft: hostile project shapes never throw', () => {
     const projects = [
       null,
@@ -378,6 +399,24 @@ describe('renderDigest', () => {
     assert.ok(digest.text.includes('14 days outstanding'));
   });
 
+  test('chase with zero/unknown elapsed time renders as outstanding, never "due today"', () => {
+    // Asks have no due date — `days` measures elapsed time since requestedOn,
+    // and 0 conflates "requested today" with "requested at unknown time".
+    const digest = renderDigest({
+      subscriber: BYRNE,
+      items: [],
+      chases: [
+        { who: 'Priya N.', what: 'Capacity answer requested today', projectName: 'Alpha', days: 0 },
+        { who: 'Ops team', what: 'Chase with no requestedOn', projectName: 'Alpha', days: null }
+      ],
+      now: NOW, ...FROM
+    });
+    assert.ok(!digest.text.includes('due today'));
+    assert.ok(!digest.html.includes('due today'));
+    assert.ok(digest.text.includes('— outstanding'));
+    assert.ok(digest.html.includes('outstanding'));
+  });
+
   test('without unsubscribeUrl, reply-UNSUBSCRIBE line is used', () => {
     const digest = renderDigest({ subscriber: BYRNE, items: [], chases: [], now: NOW, ...FROM });
     assert.ok(digest.text.includes('Reply UNSUBSCRIBE to stop'));
@@ -391,6 +430,17 @@ describe('renderDigest', () => {
     assert.ok(digest.text.includes('Nothing needs you today'));
     assert.ok(digest.html.length > 200);
     assert.ok(digest.text.includes('PocketPMO Pulse <pulse@pocketpmo.com>'));
+  });
+
+  test('chases only: empty state suppressed, chase count used in subject/heading', () => {
+    const digest = renderDigest({ subscriber: BYRNE, items: [], chases, now: NOW, ...FROM });
+    assert.match(digest.subject, /^PocketPMO: 1 chase outstanding — 2026-09-29$/);
+    assert.ok(!digest.html.includes('Nothing needs you today'));
+    assert.ok(!digest.text.includes('Nothing needs you today'));
+    assert.ok(digest.html.includes('1 chase outstanding'));
+    assert.ok(digest.text.includes('Chases — who owes what:'));
+    assert.ok(digest.text.includes('Priya N. owes: Capacity answer'));
+    assert.ok(digest.html.includes('Priya N. owes:'));
   });
 
   test('HTML is escaped for hostile titles; text output is plain', () => {
@@ -756,7 +806,7 @@ describe('runPulse', () => {
     assert.equal(summary.written, 0);
   });
 
-  test('cached load: two due subscribers produce one scan; fatal dir errors per subscriber', async () => {
+  test('cached load: two due subscribers produce one scan; fatal dir fails the run (R2 P1)', async () => {
     const dir = makeTempDir({
       'subs.json': JSON.stringify({
         subscribers: [
@@ -770,7 +820,10 @@ describe('runPulse', () => {
       PMO_PROJECTS_DIR: '/nonexistent/pulse-projects-dir',
       PULSE_FORCE: '1'
     });
-    assert.equal(summary.ok, true);
+    // R2 (P1): a fatal (unreadable projects dir) must mark the summary
+    // failed so cron observability catches the outage — per-subscriber
+    // error entries are still recorded for every due subscriber.
+    assert.equal(summary.ok, false);
     assert.equal(summary.recipients, 2);
     // One cached load, fatal preserved per subscriber: both recipients get
     // an error entry, neither crashes the run, nothing is written.
@@ -783,6 +836,33 @@ describe('runPulse', () => {
     const summary = await runPulse(pulseEnv(makeTempDir({}), { PULSE_SUBSCRIPTIONS: '/nonexistent/subs.json' }));
     assert.equal(summary.ok, false);
     assert.ok(summary.error);
+  });
+
+  test('CLI smoke: unreadable projects dir exits 1 with summary ok=false (R2 P1)', () => {
+    const dir = makeTempDir({ 'subs.json': '[{"email":"smoke@x.io","name":"Smoke"}]' });
+    let failure;
+    try {
+      execFileSync(process.execPath, [path.join(repoRoot, 'pulse.js')], {
+        cwd: repoRoot,
+        env: {
+          ...process.env,
+          PMO_PROJECTS_DIR: '/nonexistent/pulse-projects-dir',
+          PULSE_SUBSCRIPTIONS: path.join(dir, 'subs.json'),
+          PULSE_OUT_DIR: path.join(dir, 'cli-out'),
+          PULSE_DATE: '2026-09-29T09:00:00Z',
+          PULSE_FORCE: '1'
+        },
+        encoding: 'utf8'
+      });
+    } catch (err) {
+      failure = err;
+    }
+    assert.ok(failure, 'expected non-zero exit with an unreadable projects dir');
+    assert.equal(failure.status, 1);
+    const summary = JSON.parse(failure.stdout.trim().split('\n').pop());
+    assert.equal(summary.ok, false);
+    assert.equal(summary.errors.length, 1);
+    assert.ok(summary.errors[0].includes('not readable'));
   });
 
   test('CLI smoke: node pulse.js exits 0, writes dry-run files, prints summary', () => {
