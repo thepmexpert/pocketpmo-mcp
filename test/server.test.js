@@ -112,10 +112,13 @@ describe('tool calls against bundled sample project', () => {
     );
     const m = JSON.parse(r.result.content[0].text);
     assert.equal(m.budgetAtComplete, 480000);
-    // EV = 96000 (m1 complete) + 150000*0.5 + 140000*0.5 = 240000
-    assert.equal(m.earnedValue, 240000);
-    // AC = 96000 + 150000*0.5 + 140000*0.5 = 241000 (costs differ from %-weights)
-    assert.equal(m.actualCost, 241000);
+    // PR #20 R2 aligned milestones with the activity schedule (a2 design
+    // in flight, a4 not started): EV = 96000*0.5 (m1, in progress) +
+    // 144000*0.5 (m2, in progress) = 120000. Progress uses the app's
+    // canonical sentinels {0, 0.1, 1}.
+    assert.equal(m.earnedValue, 120000);
+    // AC = 96000*0.5 + 150000*0.5 = 123000 (costs differ from %-weights)
+    assert.equal(m.actualCost, 123000);
     assert.ok(m.timeline.actualTimePercentage > 0 && m.timeline.actualTimePercentage < 1);
   });
 

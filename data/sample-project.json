@@ -39,9 +39,9 @@
     "startDate": "2026-08-03",
     "plannedFinishDate": "2026-11-27",
     "milestones": [
-      { "id": "m1", "name": "Architecture signed off", "percentage": 20, "cost": 96000, "progress": 1, "owner": "D. Byrne", "dueDate": "2026-09-05" },
-      { "id": "m2", "name": "Migration scripts complete", "percentage": 30, "cost": 150000, "progress": 0.1, "owner": "Priya N.", "dueDate": "2026-09-25" },
-      { "id": "m3", "name": "Integration build complete", "percentage": 30, "cost": 140000, "progress": 0.1, "owner": "Ops team", "dueDate": "2026-10-15" },
+      { "id": "m1", "name": "Architecture signed off", "percentage": 20, "cost": 96000, "progress": 0.1, "owner": "D. Byrne", "dueDate": "2026-10-02" },
+      { "id": "m2", "name": "Migration scripts complete", "percentage": 30, "cost": 150000, "progress": 0.1, "owner": "Priya N.", "dueDate": "2026-10-10" },
+      { "id": "m3", "name": "Integration build complete", "percentage": 30, "cost": 140000, "progress": 0, "owner": "Ops team", "dueDate": "2026-10-30" },
       { "id": "m4", "name": "Go-live", "percentage": 20, "cost": 94000, "progress": 0, "owner": "D. Byrne", "dueDate": "2026-11-27" }
     ]
   },

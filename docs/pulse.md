@@ -124,7 +124,7 @@ record: Postmark over Resend):
    digest from a young domain.
 2. **Zero-dep fit**: one endpoint, one header (`X-Postmark-Server-Token`)
    — a bare `fetch`, matching the repo's zero-dep rule.
-3. **Free developer tier** (100/day) covers the MVP subscriber count.
+3. **Free developer tier** (100/month) covers the MVP subscriber count.
    Resend stays a one-module swap if pricing/needs change.
 
 Messages go out on Postmark's `broadcast` stream (permissioned, opt-out
@@ -142,7 +142,7 @@ placeholder addresses.
 ## Tests
 
 ```bash
-npm test -- test/pulse.test.js   # or the full suite: npm test
+node --test test/pulse.test.js   # or the full suite: npm test
 ```
 
 Coverage: subscriptions loading (invalid/duplicate/malformed), ranking and

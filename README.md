@@ -168,7 +168,7 @@ lib/calculators.js  PERT · CPM · Monte Carlo · EVM (pure, documented ports)
 lib/projects.js     JSON export-file store (tolerant loader)
 data/               sample project fixture
 demo/demo.mjs       real-subprocess E2E demo → markdown transcript
-test/               235 tests (node:test, zero deps; run on Node ≥ 20.11)
+test/               270 tests (node:test, zero deps; run on Node ≥ 20.11)
 ```
 
 ## Roadmap

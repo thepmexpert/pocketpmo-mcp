@@ -652,11 +652,16 @@ describe('provider send gate', () => {
     const digest = renderDigest({ subscriber: BYRNE, items: [], chases: [], now: NOW, ...FROM });
     const plus = writeDryRun({ outDir, now: NOW, subscriber: { ...BYRNE, email: 'user+tag@example.com' }, digest });
     const under = writeDryRun({ outDir, now: NOW, subscriber: { ...BYRNE, email: 'user_tag@example.com' }, digest });
+    const star = writeDryRun({ outDir, now: NOW, subscriber: { ...BYRNE, email: 'user*star@example.com' }, digest });
     assert.equal(plus.ok, true);
     assert.equal(under.ok, true);
+    assert.equal(star.ok, true);
     const plusSet = new Set(plus.written);
     for (const file of under.written) assert.ok(!plusSet.has(file), `collision: ${file}`);
     assert.ok(fs.existsSync(plus.written[0]), 'plus-tag digest intact after second write');
+    // PR #20 R2: encodeURIComponent leaves `*` unescaped; the clamp must
+    // percent-encode it so the slug stays [A-Za-z0-9-._~] (Windows-safe).
+    assert.equal(path.basename(star.written[0]), 'user%2Astar%40example.com.html');
   });
 });
 
