@@ -15,10 +15,10 @@
   "templateType": null,
   "phases": [],
   "activities": [
-    { "id": "a1", "name": "Discovery & requirements", "duration": 10, "predecessors": [] },
-    { "id": "a2", "name": "Target architecture design", "duration": 15, "predecessors": ["a1"] },
-    { "id": "a3", "name": "Data migration scripts", "duration": 20, "predecessors": ["a2"], "distribution": { "optimistic": 14, "mostLikely": 20, "pessimistic": 34 } },
-    { "id": "a4", "name": "Integration build", "duration": 30, "predecessors": ["a2"], "distribution": { "optimistic": 24, "mostLikely": 30, "pessimistic": 45 } },
+    { "id": "a1", "name": "Discovery & requirements", "duration": 10, "predecessors": [], "status": "done", "owner": "D. Byrne", "dueDate": "2026-08-14" },
+    { "id": "a2", "name": "Target architecture design", "duration": 15, "predecessors": ["a1"], "status": "in_progress", "owner": "D. Byrne", "dueDate": "2026-09-18" },
+    { "id": "a3", "name": "Data migration scripts", "duration": 20, "predecessors": ["a2"], "distribution": { "optimistic": 14, "mostLikely": 20, "pessimistic": 34 }, "status": "in_progress", "owner": "Priya N.", "dueDate": "2026-10-10" },
+    { "id": "a4", "name": "Integration build", "duration": 30, "predecessors": ["a2"], "distribution": { "optimistic": 24, "mostLikely": 30, "pessimistic": 45 }, "owner": "D. Byrne", "dueDate": "2026-10-30" },
     { "id": "a5", "name": "UAT & defect fix window", "duration": 15, "predecessors": ["a3", "a4"], "distribution": { "optimistic": 10, "mostLikely": 15, "pessimistic": 25 } },
     { "id": "a6", "name": "Cutover & hypercare", "duration": 5, "predecessors": ["a5"] }
   ],
@@ -39,10 +39,10 @@
     "startDate": "2026-08-03",
     "plannedFinishDate": "2026-11-27",
     "milestones": [
-      { "id": "m1", "name": "Architecture signed off", "percentage": 20, "cost": 96000, "progress": 1 },
-      { "id": "m2", "name": "Migration scripts complete", "percentage": 30, "cost": 150000, "progress": 0.1 },
-      { "id": "m3", "name": "Integration build complete", "percentage": 30, "cost": 140000, "progress": 0.1 },
-      { "id": "m4", "name": "Go-live", "percentage": 20, "cost": 94000, "progress": 0 }
+      { "id": "m1", "name": "Architecture signed off", "percentage": 20, "cost": 96000, "progress": 1, "owner": "D. Byrne", "dueDate": "2026-09-05" },
+      { "id": "m2", "name": "Migration scripts complete", "percentage": 30, "cost": 150000, "progress": 0.1, "owner": "Priya N.", "dueDate": "2026-09-25" },
+      { "id": "m3", "name": "Integration build complete", "percentage": 30, "cost": 140000, "progress": 0.1, "owner": "Ops team", "dueDate": "2026-10-15" },
+      { "id": "m4", "name": "Go-live", "percentage": 20, "cost": 94000, "progress": 0, "owner": "D. Byrne", "dueDate": "2026-11-27" }
     ]
   },
   "costData": {
@@ -60,6 +60,13 @@
     { "id": "r2", "name": "Integration partner resource contention", "probability": 3, "impact": 3, "status": "open", "owner": "PM", "mitigation": "Reserved capacity agreement to end-Oct" },
     { "id": "r3", "name": "UAT users unavailable during holiday window", "probability": 2, "impact": 4, "status": "monitoring", "owner": "PM", "mitigation": "Freeze cutover after 18 Dec" },
     { "id": "r4", "name": "Cloud cost overrun on dual-run", "probability": 2, "impact": 2, "status": "closed", "owner": "Finance", "mitigation": "Reserved instances purchased" }
+  ],
+  "decisions": [
+    { "id": "d1", "title": "Approve dual-run cloud budget through October", "status": "pending", "owner": "D. Byrne", "requestedOn": "2026-09-22" },
+    { "id": "d2", "title": "Pick UAT defect triage cadence", "status": "done", "owner": "D. Byrne", "requestedOn": "2026-09-10" }
+  ],
+  "asks": [
+    { "from": "Priya N.", "to": "D. Byrne", "what": "Refresh reserved-capacity agreement", "requestedOn": "2026-09-15", "status": "open" }
   ],
   "stakeholders": [],
   "resources": [],

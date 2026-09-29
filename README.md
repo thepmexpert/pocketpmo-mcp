@@ -16,7 +16,7 @@ Waffle is the staff.
 
 ```bash
 git clone <this repo> && cd pocketpmo-mcp   # no dependencies to install
-npm test                                     # 235 tests (needs Node ≥ 20.11 — see below)
+npm test                                     # 270 tests (needs Node ≥ 20.11 — see below)
 node demo/demo.mjs                           # end-to-end demo transcript
 ```
 
@@ -38,6 +38,21 @@ Projects are read from JSON export files in `PMO_PROJECTS_DIR`
 `data/sample-project.json` for a complete example (activities with
 distributions, EVM milestones, risks, cost ledger). Malformed files are
 skipped with a warning; the server never crashes on bad input.
+
+## Email pulse (outbound digest)
+
+One daily weekday email per subscriber — "N things need you" (≤3 ranked
+items: overdue work they own, pending decisions, top P×I risks on their
+projects) plus a chases section. **Dry-run by default**: renders the digest
+to `pulse-out/` and sends nothing. Real send requires `PULSE_SEND=1` plus a
+Postmark server token supplied at runtime (never committed).
+
+```bash
+PMO_PROJECTS_DIR=./data PULSE_SUBSCRIPTIONS=./subscriptions.sample.json node pulse.js
+```
+
+See `docs/pulse.md` for configuration, the ranking rule, scheduler, and
+provider decisions.
 
 ## Tools (all read-only)
 

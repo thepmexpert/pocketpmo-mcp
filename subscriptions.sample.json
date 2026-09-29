@@ -1,0 +1,16 @@
+{
+  "subscribers": [
+    {
+      "email": "d.byrne@example.com",
+      "name": "D. Byrne",
+      "projects": ["Northgate Platform Migration"],
+      "cadence": "daily"
+    },
+    {
+      "email": "priya.n@example.com",
+      "name": "Priya N.",
+      "projects": ["Northgate Platform Migration"],
+      "cadence": "weekly"
+    }
+  ]
+}
