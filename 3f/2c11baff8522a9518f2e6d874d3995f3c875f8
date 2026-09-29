@@ -1,0 +1,19 @@
+lib/pulse/needs.js
+  s_64d05b2d2e19a9::t_d17bc632f0f0f7 267-286
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "3f2c11baff8522a9518f2e6d874d3995f3c875f8",
+  "prompts": {},
+  "sessions": {
+    "s_64d05b2d2e19a9": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f136fae0ffferh05ne6IrItnRW",
+        "model": "glm-5.3-flash"
+      },
+      "human_author": "David <david4david4david4@gmail.com>"
+    }
+  }
+}
