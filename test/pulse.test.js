@@ -93,6 +93,23 @@ describe('subscriptions loader', () => {
     assert.equal(warnings.length, 3);
   });
 
+  test('invalid cadence warns and defaults to daily instead of failing silently', () => {
+    const dir = makeTempDir({
+      'subs.json': JSON.stringify({
+        subscribers: [
+          { email: 'weekley@x.io', cadence: 'weekley' }, // typo — must warn, not silently flip
+          { email: 'absent@x.io' },                      // absent cadence — silent default stays
+          { email: 'weekly@x.io', cadence: 'WEEKLY' }    // valid, case-insensitive — no warning
+        ]
+      })
+    });
+    const { subscribers, warnings, error } = loadSubscriptions(path.join(dir, 'subs.json'));
+    assert.equal(error, null);
+    assert.equal(subscribers.length, 3);
+    assert.equal(subscribers[0].cadence, 'daily');
+    assert.deepEqual(warnings, ['subscriber #1: invalid cadence "weekley", defaulting to "daily"']);
+  });
+
   test('rejects a present-but-malformed projects filter (fail closed, never widens to all projects)', () => {
     const dir = makeTempDir({
       'subs.json': JSON.stringify({
