@@ -1,0 +1,68 @@
+lib/pulse/render-ritual.js
+  s_99ff1e598de7a1::t_1a3d0f20c8fce3 35
+  s_99ff1e598de7a1::t_69067320cb7214 149-153,155
+  s_99ff1e598de7a1::t_38874b99f681f0 84-85,89-90
+  s_99ff1e598de7a1::t_c97bedfafcfa4b 1-34,36-83,86-88,91-148,154,156-194
+lib/pulse/render.js
+  s_99ff1e598de7a1::t_16d136a617c09d 15,24
+pulse.js
+  s_99ff1e598de7a1::t_9ea15c48b09e50 230-232,242-244
+  s_99ff1e598de7a1::t_0c8c4c9ecd2f71 285
+  s_99ff1e598de7a1::t_f6c062aed17cc0 266,272-284,286
+  s_99ff1e598de7a1::t_74475e91dcd50b 58-59,63
+  s_99ff1e598de7a1::t_c24d22b1ddc097 81
+  s_99ff1e598de7a1::t_65abc4f549a46e 43-44
+  s_99ff1e598de7a1::t_e29da65c8a2576 245
+subscriptions.sample.json
+  s_99ff1e598de7a1::t_5a679db2c4eab1 14-19
+lib/pulse/ritual.js
+  s_99ff1e598de7a1::t_c9d91728db4607 45
+  s_99ff1e598de7a1::t_576a945836b557 317-321,332-334,336,338-341
+  s_99ff1e598de7a1::t_58479801a592a1 1-44,46-59,64-65,70-75,77-92,94-98,100-213,216-220,224-244,247-248,250-251,256-259,261-268,270,272-316,322-331,342-353,355,357-361
+  s_99ff1e598de7a1::t_559829a95ded32 245-246,249,252-255,260,269,271
+  s_99ff1e598de7a1::t_9fe9deb44bb761 335,337,354,356
+  s_99ff1e598de7a1::t_86b12bb0c8802a 214-215,221-223
+  s_99ff1e598de7a1::t_8c6da6508be567 60-63,66-69,76,93,99
+lib/pulse/subscriptions.js
+  s_99ff1e598de7a1::t_7e080ef7aff586 14-18
+  s_99ff1e598de7a1::t_f490771c627e86 35
+test/ritual.test.js
+  s_99ff1e598de7a1::t_594a56acc9fd1a 316-319,336,354,371
+  s_99ff1e598de7a1::t_4cba81f2707a70 302-303,305
+  s_99ff1e598de7a1::t_2ecd904a5e4752 273-274,276
+  s_99ff1e598de7a1::t_87831fc155a5df 291
+  s_99ff1e598de7a1::t_0b35b78189f9ef 338-340
+  s_99ff1e598de7a1::t_39f77bd975c6bd 169
+  s_99ff1e598de7a1::t_758d95b5d4f964 83-86,91-101,105,108
+  s_99ff1e598de7a1::t_e96a58ae281068 1-82,87-90,102-104,106-107,109-168,170-227,229-272,275,277-290,292-301,304,306-315,320-335,337,341-353,355-370,372-377
+  s_99ff1e598de7a1::t_d0e9658d3d4fca 228
+docs/pulse.md
+  s_99ff1e598de7a1::t_90ec6a42155155 195-200
+  s_99ff1e598de7a1::t_fba53f07c813af 93-125
+  s_99ff1e598de7a1::t_a4f1cce448fe22 21,24-25
+  s_99ff1e598de7a1::t_7f4010a64746a0 63-65
+  s_99ff1e598de7a1::t_62ced0b5bce1dc 26
+README.md
+  s_99ff1e598de7a1::t_4f4881244801f5 46-51
+lib/pulse/needs.js
+  s_99ff1e598de7a1::t_0a3db590615f1b 310-322,335
+  s_99ff1e598de7a1::t_45e4c93bf4a2de 99
+  s_99ff1e598de7a1::t_61e5a33b753ce3 118
+  s_99ff1e598de7a1::t_07d4574c6eabb0 33
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "c221117d0bf4ca5ff0b52ec7344662f2e81f4970",
+  "prompts": {},
+  "sessions": {
+    "s_99ff1e598de7a1": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f128b04caffeAKLRKknODsIjZW",
+        "model": "glm-5.3-flash"
+      },
+      "human_author": "David <david4david4david4@gmail.com>"
+    }
+  }
+}
