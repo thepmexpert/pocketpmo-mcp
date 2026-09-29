@@ -1,0 +1,47 @@
+test/pulse.test.js
+  s_c96fb5c7f2f740::t_485602024ba68a 1-627
+lib/pulse/subscriptions.js
+  s_c96fb5c7f2f740::t_e24c9a90a3309b 1-94
+lib/pulse/provider.js
+  s_c96fb5c7f2f740::t_c589a28c2609c5 79,93,102-103
+  s_c96fb5c7f2f740::t_5b645b0702d042 1-22,26-78,80-92,94-101,104-132
+  s_c96fb5c7f2f740::t_37c501d714d6d8 23-25
+pulse.js
+  s_c96fb5c7f2f740::t_3745ea57c944a1 1-28,30-112,138-237,239-244
+  s_c96fb5c7f2f740::t_2ee03f7e99b3eb 113-116,126
+  s_c96fb5c7f2f740::t_6e3f9a58e0d13f 29,238
+  s_c96fb5c7f2f740::t_2a929b9787f436 117-125,127-137
+lib/pulse/needs.js
+  s_c96fb5c7f2f740::t_4b18b7df35710c 183-184,192-205,207-209
+  s_c96fb5c7f2f740::t_c5656442d5c5ea 1-51,56-57,64-182,185-191,206,210-302
+  s_c96fb5c7f2f740::t_e51c657d8885f4 52-55,58-63
+lib/pulse/render.js
+  s_c96fb5c7f2f740::t_87f4a83cac0b24 43,45,109,111
+  s_c96fb5c7f2f740::t_10a9c407c6d7ec 1-42,44,46-108,110,112-164
+docs/pulse.md
+  s_c96fb5c7f2f740::t_2fe3c8251cd26c 1-127
+subscriptions.sample.json
+  s_c96fb5c7f2f740::t_0b161a486f3de8 1-16
+.gitignore
+  s_c96fb5c7f2f740::t_a7990ac15afd81 4-5
+README.md
+  s_c96fb5c7f2f740::t_13579eddb7f45b 19,42-56
+data/sample-project.json
+  s_c96fb5c7f2f740::t_114035e71dc8bd 18-21,42-45,64-70
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "58417cc1b987fc2521d8f1e0efb8455322b98755",
+  "prompts": {},
+  "sessions": {
+    "s_c96fb5c7f2f740": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f13a6839affeyofQTvqDDYSdaA",
+        "model": "glm-5.3-flash"
+      },
+      "human_author": "David <david4david4david4@gmail.com>"
+    }
+  }
+}
