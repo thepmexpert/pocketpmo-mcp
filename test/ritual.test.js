@@ -177,6 +177,27 @@ describe('friday brief content', () => {
     assert.ok(!drafts[0].text.includes('Next due'));
   });
 
+  test('null or blank progress is "not reported", never a false 0%', () => {
+    for (const progress of [null, '', '   ']) {
+      const p = {
+        id: 8, name: 'Northgate Platform Migration', status: 'active',
+        progress, activities: [], risks: [], decisions: [], evmData: {}
+      };
+      const drafts = buildRitualBrief({ subscriber: PM, projects: [p], now: FRIDAY, kind: 'friday' }).drafts;
+      assert.equal(drafts.length, 1);
+      assert.equal(drafts[0].progress, null);
+      assert.match(drafts[0].text, /progress not reported in the export\./);
+      assert.ok(!drafts[0].text.includes('0% complete'));
+    }
+    // An explicit numeric 0 is a true headline and must still render.
+    const zero = {
+      id: 10, name: 'Northgate Platform Migration', status: 'active',
+      progress: 0, activities: [], risks: [], decisions: [], evmData: {}
+    };
+    const zeroDraft = buildRitualBrief({ subscriber: PM, projects: [zero], now: FRIDAY, kind: 'friday' }).drafts[0];
+    assert.match(zeroDraft.text, /Northgate Platform Migration — 0% complete\./);
+  });
+
   test('changes window captures items that came due in the last 7 days', () => {
     // a2 due 2026-09-18 is outside [2026-09-26..2026-10-02]; a3 due 2026-09-25 too.
     // Feed a project with in-window dates instead:
@@ -222,6 +243,27 @@ describe('friday brief content', () => {
     const titles = changes.map((c) => c.title);
     assert.ok(titles.includes('Recently touched'));
     assert.ok(!titles.includes('Old touch'));
+  });
+
+  test('updated decisions surface via updatedAt-style timestamps too', () => {
+    const project = {
+      id: 12, name: 'Northgate Platform Migration', status: 'active',
+      activities: [],
+      decisions: [
+        { id: 'd1', title: 'Recently updated decision', status: 'pending', owner: 'D. Byrne', requestedOn: '2026-08-15', updatedAt: '2026-09-30' },
+        { id: 'd2', title: 'Old decision, never touched', status: 'pending', owner: 'D. Byrne', requestedOn: '2026-08-15' },
+        { id: 'd3', title: 'Old touch decision', status: 'pending', owner: 'D. Byrne', requestedOn: '2026-08-15', updatedAt: '2026-09-01' }
+      ],
+      risks: [], evmData: {}
+    };
+    const changes = buildRitualBrief({ subscriber: PM, projects: [project], now: FRIDAY, kind: 'friday' }).changes;
+    const updated = changes.find((c) => c.title === 'Recently updated decision');
+    assert.ok(updated, 'recently updated decision should appear');
+    assert.equal(updated.kind, 'updated');
+    assert.equal(updated.open, true);
+    const titles = changes.map((c) => c.title);
+    assert.ok(!titles.includes('Old decision, never touched'));
+    assert.ok(!titles.includes('Old touch decision'));
   });
 
   test('honest empty state when nothing changed in the window', () => {
