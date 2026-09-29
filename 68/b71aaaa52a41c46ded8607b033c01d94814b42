@@ -1,0 +1,19 @@
+docs/pulse.md
+  s_acbfb96cbb3f34::t_28fd3cfadac2e0 21
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "68b71aaaa52a41c46ded8607b033c01d94814b42",
+  "prompts": {},
+  "sessions": {
+    "s_acbfb96cbb3f34": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f12679037ffeUUpBWESHSH65U7",
+        "model": "glm-5.3-flash"
+      },
+      "human_author": "David <david4david4david4@gmail.com>"
+    }
+  }
+}
