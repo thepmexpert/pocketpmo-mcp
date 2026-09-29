@@ -198,6 +198,24 @@ describe('friday brief content', () => {
     assert.match(zeroDraft.text, /Northgate Platform Migration — 0% complete\./);
   });
 
+  test('non-primitive progress (hostile toString, plain object) fails soft', () => {
+    // pulse.js retains only numeric/string progress at the collectProjects
+    // boundary; buildStatusDraft must hold the same line for direct callers.
+    for (const progress of [
+      { toString() { throw new Error('boom'); } },
+      {}, [42], true
+    ]) {
+      const p = {
+        id: 12, name: 'Northgate Platform Migration', status: 'active',
+        progress, activities: [], risks: [], decisions: [], evmData: {}
+      };
+      const drafts = buildRitualBrief({ subscriber: PM, projects: [p], now: FRIDAY, kind: 'friday' }).drafts;
+      assert.equal(drafts.length, 1);
+      assert.equal(drafts[0].progress, null);
+      assert.match(drafts[0].text, /progress not reported in the export\./);
+    }
+  });
+
   test('changes window captures items that came due in the last 7 days', () => {
     // a2 due 2026-09-18 is outside [2026-09-26..2026-10-02]; a3 due 2026-09-25 too.
     // Feed a project with in-window dates instead:

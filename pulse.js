@@ -78,9 +78,10 @@ function collectProjects() {
       manager: project.manager,
       projectManager: project.projectManager,
       owner: project.owner,
-      // R1 (P2): retain only primitive numeric/string progress so malformed
-      // export data degrades to "not reported" instead of coercing through
-      // Number() (e.g. null → 0 → a false "0% complete" draft headline).
+      // Retain only primitive numeric/string progress (cubic PR #21 R1 P2):
+      // buildStatusDraft does String(progress), so a malformed object with a
+      // hostile toString would throw inside the brief build and drop this
+      // subscriber's Friday ritual instead of failing soft.
       progress: typeof project.progress === 'number' || typeof project.progress === 'string'
         ? project.progress
         : undefined,
