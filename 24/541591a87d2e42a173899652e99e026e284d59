@@ -1,0 +1,30 @@
+lib/pulse/render.js
+  s_0bc19d0e89f6c5::t_9e4646f4a2013f 92-94
+  s_0bc19d0e89f6c5::t_bc7e018b54d24d 80-81,85-87
+  s_983382e4cb0c23::t_50fffac74f5c4f 60,135
+  s_0bc19d0e89f6c5::t_5ffe5282a0020e 151,153
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "24541591a87d2e42a173899652e99e026e284d59",
+  "prompts": {},
+  "sessions": {
+    "s_0bc19d0e89f6c5": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f136f9d87ffeN81MKocBpviqxD",
+        "model": "glm-5.3-flash"
+      },
+      "human_author": "David <david4david4david4@gmail.com>"
+    },
+    "s_983382e4cb0c23": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f136fa8e0ffexs4KPNWGmM46fy",
+        "model": "glm-5.3-flash"
+      },
+      "human_author": "David <david4david4david4@gmail.com>"
+    }
+  }
+}
