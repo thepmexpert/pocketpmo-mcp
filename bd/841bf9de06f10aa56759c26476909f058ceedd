@@ -1,0 +1,21 @@
+pulse.js
+  s_925e573b84b64e::t_2e8442db959e90 216-218
+docs/pulse.md
+  s_925e573b84b64e::t_a4e5678a26e6c0 40
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "bd841bf9de06f10aa56759c26476909f058ceedd",
+  "prompts": {},
+  "sessions": {
+    "s_925e573b84b64e": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f136fa1eaffeieENqdxVHgHd6u",
+        "model": "glm-5.3-flash"
+      },
+      "human_author": "David <david4david4david4@gmail.com>"
+    }
+  }
+}
