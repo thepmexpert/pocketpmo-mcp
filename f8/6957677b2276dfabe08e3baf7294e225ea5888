@@ -1,0 +1,23 @@
+server.js
+  s_aa6e0bff4701ab::t_85eaff5162ce10 350-366,369,379-384,392-394,398,404-405
+test/projects.test.js
+  s_aa6e0bff4701ab::t_2174ed04cc58ed 154-235
+test/server.test.js
+  s_aa6e0bff4701ab::t_042f9806ff3ffa 164-241
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "f86957677b2276dfabe08e3baf7294e225ea5888",
+  "prompts": {},
+  "sessions": {
+    "s_aa6e0bff4701ab": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f2d357b79ffeeEV2u2SkEm90Ec",
+        "model": "glm-5.3-flash"
+      },
+      "human_author": "David <david4david4david4@gmail.com>"
+    }
+  }
+}

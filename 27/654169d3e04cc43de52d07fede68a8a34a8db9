@@ -1,0 +1,34 @@
+.gitignore
+  s_510f411c18a4ce::t_c6a2ee22292e7f 5
+lib/pulse/provider.js
+  s_510f411c18a4ce::t_f862e56dee2a17 14
+  s_510f411c18a4ce::t_133ce781ee3d9e 197-199,201-204
+test/server.test.js
+  s_510f411c18a4ce::t_589a3caa484aa2 115-121
+docs/pulse.md
+  s_510f411c18a4ce::t_bf943bf5179aa2 145
+  s_510f411c18a4ce::t_4da0018eca1804 127
+data/sample-project.json
+  s_510f411c18a4ce::t_35c907142cbdc3 43-44
+  s_510f411c18a4ce::t_176c7aa979e2c2 42
+test/pulse.test.js
+  s_510f411c18a4ce::t_ad1ab736971301 655,658,662-664
+README.md
+  s_510f411c18a4ce::t_4da0edb6d95ac9 171
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "27654169d3e04cc43de52d07fede68a8a34a8db9",
+  "prompts": {},
+  "sessions": {
+    "s_510f411c18a4ce": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f136f9778ffelAkgbsARZT0cKh",
+        "model": "glm-5.3-flash"
+      },
+      "human_author": "David <david4david4david4@gmail.com>"
+    }
+  }
+}

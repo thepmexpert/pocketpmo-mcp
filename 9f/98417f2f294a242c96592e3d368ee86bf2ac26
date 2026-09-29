@@ -1,0 +1,32 @@
+test/calculators.full.test.js
+  s_3bf745a70b0293::t_43cb9abb5c8203 909,917-948
+  s_e7d21efc28c14b::t_f4b21e53b8dfd2 949
+lib/calculators.js
+  s_3bf745a70b0293::t_9e7c25fb20d64d 507-516
+  s_3bf745a70b0293::t_24d3caa48c7d73 341-353
+  s_3bf745a70b0293::t_f8f1af98d733e0 758-762,774-777,779-786
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "9f98417f2f294a242c96592e3d368ee86bf2ac26",
+  "prompts": {},
+  "sessions": {
+    "s_3bf745a70b0293": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f305a28cfffeqwWB0FZKoqPc4o",
+        "model": "glm-5.3-flash"
+      },
+      "human_author": "David <david4david4david4@gmail.com>"
+    },
+    "s_e7d21efc28c14b": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f30554f06ffe6T5w4gZqBikgOX",
+        "model": "glm-5.3-flash"
+      },
+      "human_author": "David <david4david4david4@gmail.com>"
+    }
+  }
+}
