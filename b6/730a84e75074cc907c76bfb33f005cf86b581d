@@ -1,0 +1,28 @@
+test/pulse.test.js
+  s_f7acf5ef58c0fc::t_d732b9e1b91e21 639
+  s_f7acf5ef58c0fc::t_a63aaca5131cf2 711-712,718-725
+  s_f7acf5ef58c0fc::t_3c1fe2c5d0766a 713-717
+  s_f7acf5ef58c0fc::t_b778301d63a2e1 23
+  s_f7acf5ef58c0fc::t_9a0003648984f3 618-620,623-626
+  s_f7acf5ef58c0fc::t_2f2724e4aabe90 602-617,621-622,627-638
+lib/pulse/provider.js
+  s_f7acf5ef58c0fc::t_0e0e7378fb0eae 138-139,147,162
+  s_f7acf5ef58c0fc::t_2642258f706870 82-83,90,106
+  s_f7acf5ef58c0fc::t_de35a4a2eb38ac 35-46
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "b6730a84e75074cc907c76bfb33f005cf86b581d",
+  "prompts": {},
+  "sessions": {
+    "s_f7acf5ef58c0fc": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f136fa0d1ffewZmNjENUinr7kJ",
+        "model": "glm-5.3-flash"
+      },
+      "human_author": "David <david4david4david4@gmail.com>"
+    }
+  }
+}
