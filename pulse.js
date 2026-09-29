@@ -78,7 +78,12 @@ function collectProjects() {
       manager: project.manager,
       projectManager: project.projectManager,
       owner: project.owner,
-      progress: project.progress, // Friday ritual status draft reads it
+      // R1 (P2): retain only primitive numeric/string progress so malformed
+      // export data degrades to "not reported" instead of coercing through
+      // Number() (e.g. null → 0 → a false "0% complete" draft headline).
+      progress: typeof project.progress === 'number' || typeof project.progress === 'string'
+        ? project.progress
+        : undefined,
       activities: project.activities,
       evmData: project.evmData,
       risks: project.risks,

@@ -490,6 +490,32 @@ describe('runPulse ritual end-to-end', () => {
     }
   });
 
+  test('malformed project.progress stays fail-soft: brief still written, no fabricated headline', async () => {
+    // R1 (P2) regression: collectProjects copied raw progress into the
+    // bounded project copy, so a malformed value rode into buildStatusDraft;
+    // null coerces through Number() to 0 → a false "0% complete" headline
+    // in a paste-ready draft. Primitive-only retention degrades to "not
+    // reported" and the Friday brief still gets written.
+    const malformed = { ...sampleProject, progress: null };
+    const dir = makeTempDir({
+      'project.json': JSON.stringify(malformed),
+      'subs.json': JSON.stringify({ subscribers: [PM] })
+    });
+    const summary = await runPulse({
+      PMO_PROJECTS_DIR: dir,
+      PULSE_SUBSCRIPTIONS: path.join(dir, 'subs.json'),
+      PULSE_OUT_DIR: path.join(dir, 'out'),
+      PULSE_DATE: '2026-10-02',
+      PULSE_TZ: 'UTC'
+    });
+    assert.equal(summary.ok, true);
+    assert.equal(summary.written, 3);
+    assert.equal(summary.errors.length, 0);
+    const text = fs.readFileSync(path.join(dir, 'out', '2026-10-02', `${slug}.txt`), 'utf8');
+    assert.ok(text.includes('Northgate Platform Migration — progress not reported in the export.'));
+    assert.ok(!text.includes('0% complete'));
+  });
+
   test('Monday run writes a monday brief with slipped + decisions', async () => {
     const dir = makeTempDir({
       'project.json': JSON.stringify(sampleProject),
