@@ -93,6 +93,29 @@ describe('subscriptions loader', () => {
     assert.equal(warnings.length, 3);
   });
 
+  test('rejects a present-but-malformed projects filter (fail closed, never widens to all projects)', () => {
+    const dir = makeTempDir({
+      'subs.json': JSON.stringify({
+        subscribers: [
+          { email: 'a@b.co', projects: 'Northgate' },          // string, not array
+          { email: 'c@d.co', projects: { 0: 'Northgate' } },   // object, not array
+          { email: 'e@f.co', projects: [null] },               // non-string entry
+          { email: 'g@h.co', projects: [''] },                 // empty-string entry
+          { email: 'i@j.co', projects: ['  Ops  ', 7] },       // one bad entry rejects the whole filter
+          { email: 'k@l.co', projects: [] },                   // intentional empty filter — kept
+          { email: 'm@n.co' }                                  // absent filter — kept
+        ]
+      })
+    });
+    const { subscribers, warnings, error } = loadSubscriptions(path.join(dir, 'subs.json'));
+    assert.equal(error, null);
+    assert.deepEqual(subscribers.map((s) => s.email), ['k@l.co', 'm@n.co']);
+    assert.deepEqual(subscribers[0].projects, []);
+    assert.deepEqual(subscribers[1].projects, []);
+    assert.equal(warnings.length, 5);
+    assert.ok(warnings.every((w) => w.includes('invalid projects filter')), warnings.join('\n'));
+  });
+
   test('deduplicates by email', () => {
     const dir = makeTempDir({
       'subs.json': JSON.stringify({
