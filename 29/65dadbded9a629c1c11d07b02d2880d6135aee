@@ -1,0 +1,32 @@
+test/pulse.test.js
+  s_cb0ba59df8765e::t_92c280c162551a 27
+  s_cb0ba59df8765e::t_49e8e582f6c451 712-744
+  s_cb0ba59df8765e::t_f82b8a468048aa 1002-1040
+pulse.js
+  s_cb0ba59df8765e::t_70895fbba39c3d 108
+  s_cb0ba59df8765e::t_9558331a11aa30 20-29,40
+  s_cb0ba59df8765e::t_2f79182bb7caca 89,92-94,162-164,168-174,203
+docs/pulse.md
+  s_cb0ba59df8765e::t_da183d347ebe5f 39,96,100-101
+  s_cb0ba59df8765e::t_1f1e414691abe7 62-63,156-158
+lib/pulse/calendar.js
+  s_cb0ba59df8765e::t_0efbb544676769 1-74
+lib/pulse/provider.js
+  s_cb0ba59df8765e::t_2ce70d982aa4d0 162-165,168,185
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "2965dadbded9a629c1c11d07b02d2880d6135aee",
+  "prompts": {},
+  "sessions": {
+    "s_cb0ba59df8765e": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f136fa598ffe5g0pUVaxAf04xI",
+        "model": "glm-5.3-flash"
+      },
+      "human_author": "David <david4david4david4@gmail.com>"
+    }
+  }
+}
