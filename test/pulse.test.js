@@ -839,6 +839,11 @@ describe('runPulse', () => {
       PULSE_OUT_DIR: path.join(dir, 'out'),
       PULSE_DATE: '2026-09-29T09:00:00Z', // a Tuesday
       PULSE_FORCE: '1',
+      // pin the send gate closed so dry-run guarantees never depend on the
+      // ambient shell (staging runs with PULSE_SEND=1 + a real token);
+      // send-path tests override these explicitly via `extra`.
+      PULSE_SEND: '',
+      POSTMARK_SERVER_TOKEN: '',
       ...extra
     };
   }
@@ -1055,6 +1060,9 @@ describe('runPulse', () => {
         cwd: repoRoot,
         env: {
           ...process.env,
+          // strip ambient send-gate env so the smoke run stays a dry-run
+          PULSE_SEND: '',
+          POSTMARK_SERVER_TOKEN: '',
           PMO_PROJECTS_DIR: '/nonexistent/pulse-projects-dir',
           PULSE_SUBSCRIPTIONS: path.join(dir, 'subs.json'),
           PULSE_OUT_DIR: path.join(dir, 'cli-out'),
@@ -1083,6 +1091,9 @@ describe('runPulse', () => {
         cwd: repoRoot,
         env: {
           ...process.env,
+          // strip ambient send-gate env so the smoke run stays a dry-run
+          PULSE_SEND: '',
+          POSTMARK_SERVER_TOKEN: '',
           PMO_PROJECTS_DIR: dataDir,
           PULSE_SUBSCRIPTIONS: path.join(dir, 'subs.json'),
           PULSE_OUT_DIR: out,
