@@ -355,6 +355,25 @@ describe('runPulse ritual end-to-end', () => {
     assert.ok(forcedText.includes('Status drafts — paste-ready:'));
   });
 
+  test('PULSE_FORCE must be exactly "1" — "0"/"true" do not bypass the cadence guard', async () => {
+    const dir = makeTempDir({
+      'project.json': JSON.stringify(sampleProject),
+      'subs.json': JSON.stringify({ subscribers: [PM] })
+    });
+    const baseEnv = {
+      PMO_PROJECTS_DIR: dir,
+      PULSE_SUBSCRIPTIONS: path.join(dir, 'subs.json'),
+      PULSE_OUT_DIR: path.join(dir, 'out'),
+      PULSE_DATE: '2026-09-29', // Tuesday — ritual not due
+      PULSE_TZ: 'UTC'
+    };
+    for (const notOne of ['0', 'true', 'yes']) {
+      const summary = await runPulse({ ...baseEnv, PULSE_FORCE: notOne });
+      assert.equal(summary.skipped, 1, `PULSE_FORCE=${notOne} must not bypass`);
+      assert.equal(summary.written, 0);
+    }
+  });
+
   test('Monday run writes a monday brief with slipped + decisions', async () => {
     const dir = makeTempDir({
       'project.json': JSON.stringify(sampleProject),
