@@ -213,7 +213,9 @@ async function pulseBody(env) {
   for (const subscriber of roster.subscribers) {
     let outcome;
     try {
-      if (!env.PULSE_FORCE && !cadenceDue(subscriber.cadence, now)) {
+      // R2 (P1): require the EXACT value '1' — a truthy check let a
+      // misconfigured PULSE_FORCE=0 weekend production run send digests.
+      if (env.PULSE_FORCE !== '1' && !cadenceDue(subscriber.cadence, now)) {
         summary.skipped += 1;
         continue;
       }
