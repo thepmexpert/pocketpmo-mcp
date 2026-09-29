@@ -1,0 +1,21 @@
+test/ritual.test.js
+  s_a76c9a609232cf::t_8f07cfe3ea351e 437-462
+pulse.js
+  s_a76c9a609232cf::t_2630f98c51e05a 81-86
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "560fa809aae53c633e72de2677a7c631a4d053bd",
+  "prompts": {},
+  "sessions": {
+    "s_a76c9a609232cf": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f12679031ffeFvemIpbrAVhq3A",
+        "model": "glm-5.3-flash"
+      },
+      "human_author": "David <david4david4david4@gmail.com>"
+    }
+  }
+}
