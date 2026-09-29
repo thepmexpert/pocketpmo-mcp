@@ -21,8 +21,9 @@ JSON summary line on stdout:
 {"ok":true,"dryRun":true,"recipients":2,"sent":0,"written":3,"skipped":1,"errors":[],"warnings":[]}
 ```
 
-Dry-run is the DEFAULT. Real sending requires `PULSE_SEND=1` **and** a
-`POSTMARK_SERVER_TOKEN` in the environment (see `lib/pulse/provider.js`).
+Dry-run is the DEFAULT. Real sending requires `PULSE_SEND=1` **and** the
+selected provider's credentials (`PULSE_PROVIDER`: `agentmail` | `postmark`,
+default `postmark` — see `lib/pulse/provider.js`).
 
 ## Configuration (env)
 
@@ -32,12 +33,15 @@ Dry-run is the DEFAULT. Real sending requires `PULSE_SEND=1` **and** a
 | `PULSE_SUBSCRIPTIONS` | `./subscriptions.json` | Recipient roster (see `subscriptions.sample.json`). Keep production rosters **outside the repo** — recipient emails are personal data. |
 | `PULSE_OUT_DIR` | `./pulse-out` | Dry-run output directory (gitignored). |
 | `PULSE_FROM_NAME` | `PocketPMO Pulse` | Sender identity. |
-| `PULSE_FROM_EMAIL` | `pulse@pocketpmo.com` | Sender address — must be SPF/DKIM-aligned on the sending domain. |
+| `PULSE_FROM_EMAIL` | `pulse@pocketpmo.com` | Sender address — with AgentMail it rides as Reply-To (envelope-from is the inbox); with Postmark it is the envelope From and must be SPF/DKIM-aligned. |
 | `PULSE_UNSUBSCRIBE_URL` | _(none)_ | Optional https unsubscribe link; without it the footer asks for a `UNSUBSCRIBE` reply. |
 | `PULSE_DATE` | now | Override "today" (ISO); used by tests and manual replays. |
 | `PULSE_FORCE` | _(unset)_ | `1` bypasses the weekday/cadence guard (staging tests only). |
 | `PULSE_SEND` | _(unset)_ | Must be exactly `1` to enable real sends. |
-| `POSTMARK_SERVER_TOKEN` | _(none)_ | Postmark server token. **Secret**: issued via a Paperclip secret proposal; never committed to git, `.env` files, or docs. |
+| `PULSE_PROVIDER` | `postmark` | `agentmail` or `postmark`. Unknown values select postmark, whose missing credentials keep the gate closed (misconfiguration fails toward dry-run). |
+| `AGENTMAIL_API_KEY` | _(none)_ | AgentMail API key (used when `PULSE_PROVIDER=agentmail`). **Secret**: system keychain / Paperclip secret proposal; never committed. |
+| `AGENTMAIL_INBOX_ID` | _(none)_ | Sending AgentMail inbox id, e.g. `pocketpmo-pulse@agentmail.to`. **Secret-adjacent config**; provisioned with the key. |
+| `POSTMARK_SERVER_TOKEN` | _(none)_ | Postmark server token (default provider). **Secret**: issued via a Paperclip secret proposal; never committed to git, `.env` files, or docs. |
 
 ## Subscriptions file
 
@@ -86,13 +90,34 @@ monitor, and logs go to the host's usual capture. Suggested crontab (06:30
 Mon–Fri local):
 
 ```
-30 6 * * 1-5  cd /path/to/pocketpmo-mcp && /usr/bin/env PMO_PROJECTS_DIR=/path/to/data PULSE_SUBSCRIPTIONS=/path/to/subscriptions.json PULSE_SEND=1 POSTMARK_SERVER_TOKEN="$PULSE_POSTMARK_TOKEN" node pulse.js >> /var/log/pocketpmo-pulse.log 2>&1
+30 6 * * 1-5  cd /path/to/pocketpmo-mcp && /usr/bin/env PMO_PROJECTS_DIR=/path/to/data PULSE_SUBSCRIPTIONS=/path/to/subscriptions.json PULSE_SEND=1 PULSE_PROVIDER=agentmail AGENTMAIL_API_KEY="$PULSE_AGENTMAIL_KEY" AGENTMAIL_INBOX_ID="pocketpmo-pulse@agentmail.to" node pulse.js >> /var/log/pocketpmo-pulse.log 2>&1
 ```
 
-(Feed the token from a root-owned environment file or `launchd`
+(Feed the credentials from a root-owned environment file or `launchd`
 `EnvironmentVariables`, not from this repo.)
 
-## Provider (CTO decision): Postmark over Resend
+## Provider (CTO decision): selectable — AgentMail (staging) / Postmark (prod candidate)
+
+`PULSE_PROVIDER` selects the delivery client; both live in
+`lib/pulse/provider.js` as zero-dep `fetch` wrappers with the same
+`{ok, messageId|error}` result contract.
+
+**AgentMail** (board directive 2026-09-29 — the company's credentialed
+channel today, used for P2 staging):
+
+1. **No DNS prerequisites**: sends originate from a dedicated AgentMail
+   inbox (e.g. `pocketpmo-pulse@agentmail.to`), so staging can start
+   without the board-owned pocketpmo.com DNS changes.
+2. **Verifiable delivery**: the internal test mailbox is an AgentMail
+   inbox too, so delivery is confirmed by reading the recipient inbox via
+   the API — no human "did it arrive?" loop.
+3. **Envelope-from is the inbox address**; `PULSE_FROM_EMAIL`
+   (`pulse@pocketpmo.com`) is passed as Reply-To. SPF/DKIM alignment of
+   the visible From: on pocketpmo.com remains a board DNS decision for
+   production (AgentMail custom domains, exact records on request).
+
+**Postmark** (production candidate, default provider — original decision
+record: Postmark over Resend):
 
 1. **Deliverability**: Postmark's network is transactional-only; shared
    pools carry no marketing mail — the right profile for an operational
@@ -100,18 +125,18 @@ Mon–Fri local):
 2. **Zero-dep fit**: one endpoint, one header (`X-Postmark-Server-Token`)
    — a bare `fetch`, matching the repo's zero-dep rule.
 3. **Free developer tier** (100/day) covers the MVP subscriber count.
-   The provider is isolated in `lib/pulse/provider.js`; swapping to Resend
-   is a one-module change if pricing/needs change.
+   Resend stays a one-module swap if pricing/needs change.
 
 Messages go out on Postmark's `broadcast` stream (permissioned, opt-out
 digests — not password-reset-style transactional mail).
 
 ## Secret handling
 
-`POSTMARK_SERVER_TOKEN` is a credential. It is provisioned through a
-**Paperclip secret proposal** and injected into the worker's environment at
-runtime. It must never appear in git history, `.env` files, issue comments,
-or documentation. The repo's `subscriptions.sample.json` contains only
+`AGENTMAIL_API_KEY` and `POSTMARK_SERVER_TOKEN` are credentials. They are
+provisioned through a **Paperclip secret proposal** (or the macOS system
+keychain) and injected into the worker's environment at runtime. They must
+never appear in git history, `.env` files, issue comments, or
+documentation. The repo's `subscriptions.sample.json` contains only
 placeholder addresses.
 
 ## Tests
@@ -122,6 +147,6 @@ npm test -- test/pulse.test.js   # or the full suite: npm test
 
 Coverage: subscriptions loading (invalid/duplicate/malformed), ranking and
 selection, empty state, malformed-project fail-soft, HTML/text rendering
-(escapes, unsubscribe line, sender identity), the dry-run/send gate, the
-Postmark client against a fake fetch, cadence guard, and an end-to-end
-`runPulse` dry run over `data/sample-project.json`.
+(escapes, unsubscribe line, sender identity), the provider-aware dry-run/
+send gate, the Postmark and AgentMail clients against a fake fetch, cadence
+guard, and an end-to-end `runPulse` dry run over `data/sample-project.json`.

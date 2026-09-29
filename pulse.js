@@ -8,9 +8,12 @@
  * digest + chases, then either:
  *   • dry-run (DEFAULT): writes rendered HTML/text to PULSE_OUT_DIR —
  *     sends nothing; or
- *   • real send: only when PULSE_SEND=1 AND POSTMARK_SERVER_TOKEN is set
- *     (lib/pulse/provider.js isSendEnabled). The token arrives via a
- *     Paperclip secret proposal — never git, never .env files, never docs.
+ *   • real send: only when PULSE_SEND=1 AND the selected provider's
+ *     credentials are set (PULSE_PROVIDER=agentmail → AGENTMAIL_API_KEY +
+ *     AGENTMAIL_INBOX_ID; default postmark → POSTMARK_SERVER_TOKEN; see
+ *     lib/pulse/provider.js isSendEnabled). Credentials arrive via a
+ *     Paperclip secret proposal / the system keychain — never git, never
+ *     .env files, never docs.
  *
  * Cadence guard (defense in depth for cron misconfig): "daily" subscribers
  * are served Mon–Fri only, "weekly" subscribers on Mondays. PULSE_FORCE=1
@@ -31,7 +34,7 @@ import { loadAllProjects, projectsDir } from './lib/projects.js';
 import { loadSubscriptions } from './lib/pulse/subscriptions.js';
 import { buildDigestItems, MAX_ITEMS, MAX_CHASES } from './lib/pulse/needs.js';
 import { renderDigest } from './lib/pulse/render.js';
-import { isSendEnabled, sendViaPostmark, writeDryRun } from './lib/pulse/provider.js';
+import { isSendEnabled, resolveProvider, sendViaPostmark, sendViaAgentmail, writeDryRun } from './lib/pulse/provider.js';
 
 function envDefault(name, fallback) {
   const value = process.env[name];
@@ -98,14 +101,25 @@ async function deliver(ctx, subscriber, digest) {
     });
     return { action: 'dry-run', result };
   }
-  const result = await sendViaPostmark({
-    token: process.env.POSTMARK_SERVER_TOKEN,
-    from: `${ctx.fromName} <${ctx.fromEmail}>`,
-    to: subscriber.email,
-    subject: digest.subject,
-    html: digest.html,
-    text: digest.text
-  });
+  const from = `${ctx.fromName} <${ctx.fromEmail}>`;
+  const result = resolveProvider(process.env) === 'agentmail'
+    ? await sendViaAgentmail({
+        apiKey: process.env.AGENTMAIL_API_KEY,
+        inboxId: process.env.AGENTMAIL_INBOX_ID,
+        from,
+        to: subscriber.email,
+        subject: digest.subject,
+        html: digest.html,
+        text: digest.text
+      })
+    : await sendViaPostmark({
+        token: process.env.POSTMARK_SERVER_TOKEN,
+        from,
+        to: subscriber.email,
+        subject: digest.subject,
+        html: digest.html,
+        text: digest.text
+      });
   return { action: 'send', result };
 }
 
@@ -118,7 +132,7 @@ export async function runPulse(env = process.env) {
   // into the next (back-to-back runPulse calls, e.g. in tests, would
   // otherwise inherit a previous run's PULSE_SEND/token — exactly the kind
   // of state bleed that turns a dry-run into a surprise send).
-  const managedKeys = Object.keys(env).filter((key) => /^(PMO_|PULSE_|POSTMARK_)/.test(key));
+  const managedKeys = Object.keys(env).filter((key) => /^(PMO_|PULSE_|POSTMARK_|AGENTMAIL_)/.test(key));
   const snapshot = {};
   for (const key of managedKeys) {
     snapshot[key] = process.env[key];

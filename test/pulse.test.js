@@ -17,8 +17,11 @@ import { renderDigest } from '../lib/pulse/render.js';
 import {
   isSendEnabled,
   sendViaPostmark,
+  sendViaAgentmail,
+  resolveProvider,
   writeDryRun,
-  POSTMARK_URL
+  POSTMARK_URL,
+  AGENTMAIL_URL
 } from '../lib/pulse/provider.js';
 import { runPulse, cadenceDue } from '../pulse.js';
 
@@ -456,6 +459,79 @@ describe('provider send gate', () => {
     assert.ok(nonJson.error.includes('502'));
   });
 
+  test('resolveProvider: default postmark; only exact agentmail selects AgentMail', () => {
+    assert.equal(resolveProvider({}), 'postmark');
+    assert.equal(resolveProvider({ PULSE_PROVIDER: 'postmark' }), 'postmark');
+    assert.equal(resolveProvider({ PULSE_PROVIDER: 'postmakr' }), 'postmark'); // typo fails toward dry-run, not a crash
+    assert.equal(resolveProvider({ PULSE_PROVIDER: 'agentmail' }), 'agentmail');
+  });
+
+  test('send gate is provider-aware: agentmail needs key AND inbox id', () => {
+    assert.equal(isSendEnabled({ PULSE_SEND: '1', PULSE_PROVIDER: 'agentmail' }), false);
+    assert.equal(isSendEnabled({ PULSE_SEND: '1', PULSE_PROVIDER: 'agentmail', AGENTMAIL_API_KEY: 'k' }), false);
+    assert.equal(isSendEnabled({ PULSE_SEND: '1', PULSE_PROVIDER: 'agentmail', AGENTMAIL_INBOX_ID: 'i' }), false);
+    assert.equal(isSendEnabled({ PULSE_SEND: '1', PULSE_PROVIDER: 'agentmail', AGENTMAIL_API_KEY: 'k', AGENTMAIL_INBOX_ID: 'i' }), true);
+    // provider default unchanged: postmark token still gates
+    assert.equal(isSendEnabled({ PULSE_SEND: '1', AGENTMAIL_API_KEY: 'k', AGENTMAIL_INBOX_ID: 'i' }), false);
+  });
+
+  test('sendViaAgentmail posts to the inbox send endpoint with bearer auth and digest body', async () => {
+    const calls = [];
+    const fetchImpl = async (url, options) => {
+      calls.push({ url, options });
+      return { ok: true, json: async () => ({ message_id: 'am-1', thread_id: 't-1' }) };
+    };
+    const result = await sendViaAgentmail({
+      fetchImpl, apiKey: 'k', inboxId: 'pulse@agentmail.to', from: 'PocketPMO Pulse <pulse@pocketpmo.com>',
+      to: 'x@y.io', subject: 's', html: '<p>h</p>', text: 't'
+    });
+    assert.deepEqual(result, { ok: true, messageId: 'am-1' });
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].url, `${AGENTMAIL_URL}/inboxes/${encodeURIComponent('pulse@agentmail.to')}/messages/send`);
+    assert.equal(calls[0].options.method, 'POST');
+    assert.equal(calls[0].options.headers.Authorization, 'Bearer k');
+    const body = JSON.parse(calls[0].options.body);
+    assert.deepEqual(body.to, ['x@y.io']);
+    // envelope-from is the inbox; the configured pulse address rides as Reply-To
+    assert.deepEqual(body.reply_to, ['PocketPMO Pulse <pulse@pocketpmo.com>']);
+    assert.equal(body.subject, 's');
+    assert.equal(body.html, '<p>h</p>');
+    assert.equal(body.text, 't');
+  });
+
+  test('sendViaAgentmail: missing key or inbox id fails fast without any network call', async () => {
+    let called = false;
+    const fetchImpl = async () => { called = true; };
+    const noKey = await sendViaAgentmail({ fetchImpl, apiKey: null, inboxId: 'i', to: 'x@y.io' });
+    assert.equal(noKey.ok, false);
+    assert.ok(noKey.error.includes('AGENTMAIL_API_KEY'));
+    const noInbox = await sendViaAgentmail({ fetchImpl, apiKey: 'k', inboxId: '', to: 'x@y.io' });
+    assert.equal(noInbox.ok, false);
+    assert.ok(noInbox.error.includes('AGENTMAIL_INBOX_ID'));
+    assert.equal(called, false);
+  });
+
+  test('sendViaAgentmail: API and network errors become results, never throws', async () => {
+    const apiErr = await sendViaAgentmail({
+      fetchImpl: async () => ({ ok: false, status: 403, json: async () => ({ message: 'rejected' }) }),
+      apiKey: 'k', inboxId: 'i', to: 'x@y.io'
+    });
+    assert.equal(apiErr.ok, false);
+    assert.ok(apiErr.error.includes('rejected'));
+    const netErr = await sendViaAgentmail({
+      fetchImpl: async () => { throw new Error('EAI_AGAIN'); },
+      apiKey: 'k', inboxId: 'i', to: 'x@y.io'
+    });
+    assert.equal(netErr.ok, false);
+    assert.ok(netErr.error.includes('EAI_AGAIN'));
+    const nonJson = await sendViaAgentmail({
+      fetchImpl: async () => ({ ok: false, status: 500, json: async () => { throw new Error('not json'); } }),
+      apiKey: 'k', inboxId: 'i', to: 'x@y.io'
+    });
+    assert.equal(nonJson.ok, false);
+    assert.ok(nonJson.error.includes('500'));
+  });
+
   test('writeDryRun persists html/txt/json under outDir/date and returns paths', () => {
     const outDir = makeTempDir({});
     const digest = renderDigest({ subscriber: BYRNE, items: [], chases: [], now: NOW, ...FROM });
@@ -589,6 +665,51 @@ describe('runPulse', () => {
       assert.equal(summary.written, 0);
       assert.equal(calls.length, 1);
       assert.equal(calls[0].options.headers['X-Postmark-Server-Token'], 'test-token');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test('real send via PULSE_PROVIDER=agentmail delivers through the AgentMail client', async () => {
+    const dir = makeTempDir({ 'subs.json': '[{"email":"x@y.io"}]' });
+    const calls = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async (url, options) => {
+      calls.push({ url, options });
+      return { ok: true, json: async () => ({ message_id: 'am-e2e' }) };
+    };
+    try {
+      const summary = await runPulse(pulseEnv(dir, {
+        PULSE_SEND: '1',
+        PULSE_PROVIDER: 'agentmail',
+        AGENTMAIL_API_KEY: 'test-key',
+        AGENTMAIL_INBOX_ID: 'pulse@agentmail.to'
+      }));
+      assert.equal(summary.sent, 1);
+      assert.equal(summary.written, 0);
+      assert.equal(calls.length, 1);
+      assert.ok(calls[0].url.includes('/inboxes/pulse%40agentmail.to/messages/send'));
+      assert.equal(calls[0].options.headers.Authorization, 'Bearer test-key');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test('agentmail gate closed without creds: PULSE_SEND=1 still dry-runs', async () => {
+    const dir = makeTempDir({ 'subs.json': '[{"email":"x@y.io"}]' });
+    let networkCalls = 0;
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () => { networkCalls += 1; return { ok: true, json: async () => ({}) }; };
+    try {
+      const summary = await runPulse(pulseEnv(dir, {
+        PULSE_SEND: '1',
+        PULSE_PROVIDER: 'agentmail',
+        AGENTMAIL_API_KEY: '',
+        AGENTMAIL_INBOX_ID: ''
+      }));
+      assert.equal(summary.dryRun, true);
+      assert.equal(summary.written, 3);
+      assert.equal(networkCalls, 0);
     } finally {
       globalThis.fetch = originalFetch;
     }
