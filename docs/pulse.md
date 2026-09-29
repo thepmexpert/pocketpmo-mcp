@@ -18,7 +18,7 @@ Output: `pulse-out/<YYYY-MM-DD>/<email>.html` + `.txt` + `.json`, and one
 JSON summary line on stdout:
 
 ```json
-{"ok":true,"dryRun":true,"recipients":3,"sent":0,"written":3,"skipped":0,"errors":[],"warnings":[]}
+{"ok":true,"dryRun":true,"recipients":3,"sent":0,"written":9,"skipped":0,"errors":[],"warnings":[]}
 ```
 
 (recipients/written counts reflect the sample roster on a Monday: one
