@@ -11,6 +11,12 @@
       "name": "Priya N.",
       "projects": ["Northgate Platform Migration"],
       "cadence": "weekly"
+    },
+    {
+      "email": "pm.ritual@example.com",
+      "name": "S. Okafor",
+      "projects": ["Northgate Platform Migration"],
+      "cadence": "ritual"
     }
   ]
 }

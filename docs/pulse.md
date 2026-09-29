@@ -18,8 +18,11 @@ Output: `pulse-out/<YYYY-MM-DD>/<email>.html` + `.txt` + `.json`, and one
 JSON summary line on stdout:
 
 ```json
-{"ok":true,"dryRun":true,"recipients":2,"sent":0,"written":3,"skipped":1,"errors":[],"warnings":[]}
+{"ok":true,"dryRun":true,"recipients":3,"sent":0,"written":3,"skipped":0,"errors":[],"warnings":[]}
 ```
+
+(recipients/written counts reflect the sample roster on a Monday: one
+`daily`, one `weekly`, one `ritual` subscriber — all three due.)
 
 Dry-run is the DEFAULT. Real sending requires `PULSE_SEND=1` **and** the
 selected provider's credentials (`PULSE_PROVIDER`: `agentmail` | `postmark`,
@@ -57,7 +60,9 @@ default `postmark` — see `lib/pulse/provider.js`).
 
 - `name` drives owner matching (see below); `projects` filters which
   exports feed the digest (empty/missing = all projects).
-- `cadence`: `daily` (served Mon–Fri) or `weekly` (served Mondays).
+- `cadence`: `daily` (served Mon–Fri), `weekly` (served Mondays), or
+  `ritual` (served Mondays + Fridays with the Monday/Friday ritual
+  briefs — see below).
   The worker enforces this itself — a cron misconfig cannot spam weekends.
   The weekday guard reads the `PULSE_TZ` (default host-local) calendar
   day, matching the crontab's clock — see `lib/pulse/calendar.js`.
@@ -84,6 +89,39 @@ getters. Owner matching is exact-lowercase, email, or a shared name token
 of length ≥ 3 (`D. Byrne` matches `David Byrne`; role labels like `PM`
 never match). Anything unparseable is skipped — a missing date can never
 fabricate an "overdue" item, and malformed projects never crash the run.
+
+## Ritual briefs (`cadence: "ritual"` — TPMAAAA-2370)
+
+Beyond the daily digest, a subscriber on `cadence: "ritual"` gets ONE
+brief per PM ritual day, rendered by `lib/pulse/ritual.js` +
+`lib/pulse/render-ritual.js`. Served Mondays and Fridays only (the
+worker enforces this like every cadence — a cron misconfig cannot send a
+ritual brief on a Wednesday):
+
+- **Monday — what slipped + decisions you owe.** Every open, past-due
+  activity/milestone on the subscriber's projects (owner-attributed, the
+  recipient's own items flagged "yours"), worst first, capped at 8 with an
+  overflow note; plus pending decisions waiting on the recipient, days
+  waiting, capped at 8. Nothing slipped → a short clean-slate brief.
+- **Friday — status draft + changes since last week.** Per referenced
+  project, a factual, copy-paste-ready status paragraph (progress,
+  overdue count + worst item, decisions pending on you, top open P×I
+  risk, next due date — only the fields the export actually contains, no
+  invented RAG ratings); plus every derivable change inside the last 7
+  calendar days (items that came due — still open or closed —, decisions
+  raised, and `updatedAt`/`modifiedAt`/`lastUpdated` timestamps when a
+  future export grows them), capped at 10.
+
+**Honesty constraint:** project exports carry no change history (no
+`updatedAt` in the wild today). "Changes since last week" is therefore
+derived ONLY from dates the exports contain; a quiet week renders an
+explicit "no dated changes in the project exports over the last 7 days"
+line. A missing date never fabricates a change.
+
+**`PULSE_BRIEF`** (`monday`|`friday`): overrides the weekday-derived
+brief for `PULSE_FORCE` staging runs on other days; an invalid value
+warns and falls back to the weekday default (Mon→monday, Fri→friday,
+any other forced day→monday).
 
 ## Scheduler (CTO decision)
 
@@ -154,5 +192,9 @@ selection, empty state, malformed-project fail-soft, HTML/text rendering
 (escapes, unsubscribe line, sender identity), the provider-aware dry-run/
 send gate, the Postmark and AgentMail clients against a fake fetch, cadence
 guard, the `PULSE_TZ` calendar anchoring (guard/labels/folders/overdue math
-on one calendar), and an end-to-end `runPulse` dry run over
-`data/sample-project.json`.
+on one calendar), an end-to-end `runPulse` dry run over
+`data/sample-project.json`, and the ritual briefs (`test/ritual.test.js`:
+Monday slipped/decisions extraction + caps, Friday status drafts, the
+7-day change window incl. updatedAt tolerance and the honest empty state,
+brief-kind resolution incl. `PULSE_BRIEF` override/warning, ritual
+cadence guard, and an end-to-end ritual dry run).

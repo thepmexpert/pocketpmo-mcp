@@ -40,6 +40,8 @@ import { loadSubscriptions } from './lib/pulse/subscriptions.js';
 import { resolvePulseTimeZone, calendarAnchor } from './lib/pulse/calendar.js';
 import { buildDigestItems, MAX_ITEMS, MAX_CHASES } from './lib/pulse/needs.js';
 import { renderDigest } from './lib/pulse/render.js';
+import { buildRitualBrief, resolveRitualBriefKind } from './lib/pulse/ritual.js';
+import { renderRitualBrief } from './lib/pulse/render-ritual.js';
 import { isSendEnabled, resolveProvider, sendViaPostmark, sendViaAgentmail, writeDryRun } from './lib/pulse/provider.js';
 
 function envDefault(name, fallback) {
@@ -53,10 +55,12 @@ function log(message) {
   } catch {}
 }
 
-/** Weekday guard: 0=Sun..6=Sat. Daily → Mon–Fri; weekly → Mon. */
+/** Weekday guard: 0=Sun..6=Sat. Daily → Mon–Fri; weekly → Mon;
+ * ritual → Mon + Fri (the two PM ritual days, TPMAAAA-2370). */
 export function cadenceDue(cadence, now) {
   const day = now.getUTCDay();
   if (cadence === 'weekly') return day === 1;
+  if (cadence === 'ritual') return day === 1 || day === 5;
   return day >= 1 && day <= 5;
 }
 
@@ -74,6 +78,7 @@ function collectProjects() {
       manager: project.manager,
       projectManager: project.projectManager,
       owner: project.owner,
+      progress: project.progress, // Friday ritual status draft reads it
       activities: project.activities,
       evmData: project.evmData,
       risks: project.risks,
@@ -222,6 +227,9 @@ async function pulseBody(env) {
   // exactly who was affected.
   let projects = null;
   let load = null;
+  // The ritual brief kind (monday/friday) is resolved ONCE per run so a
+  // PULSE_BRIEF typo warns once, not once per subscriber.
+  let ritualBrief = null;
   for (const subscriber of roster.subscribers) {
     let outcome;
     try {
@@ -230,6 +238,10 @@ async function pulseBody(env) {
       if (env.PULSE_FORCE !== '1' && !cadenceDue(subscriber.cadence, now)) {
         summary.skipped += 1;
         continue;
+      }
+      if (subscriber.cadence === 'ritual' && ritualBrief === null) {
+        ritualBrief = resolveRitualBriefKind(env, now);
+        if (ritualBrief.warning) summary.warnings.push(ritualBrief.warning);
       }
       if (load === null) {
         ({ projects, load } = collectProjects());
@@ -251,16 +263,27 @@ async function pulseBody(env) {
         summary.ok = false;
         throw new Error(load.fatal);
       }
-      const { items, chases } = buildDigestItems({ subscriber, projects, now });
-      const digest = renderDigest({
+      const renderArgs = {
         subscriber,
-        items,
-        chases,
         now,
         fromName: ctx.fromName,
         fromEmail: ctx.fromEmail,
         unsubscribeUrl: ctx.unsubscribeUrl
-      });
+      };
+      const digest = subscriber.cadence === 'ritual'
+        ? renderRitualBrief({
+            ...renderArgs,
+            brief: buildRitualBrief({
+              subscriber,
+              projects,
+              now,
+              kind: ritualBrief.kind
+            })
+          })
+        : renderDigest({
+            ...renderArgs,
+            ...buildDigestItems({ subscriber, projects, now })
+          });
       outcome = await deliver(ctx, subscriber, digest);
     } catch (err) {
       summary.errors.push(`${subscriber.email}: ${err.message}`);

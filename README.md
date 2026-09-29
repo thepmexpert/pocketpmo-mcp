@@ -43,9 +43,12 @@ skipped with a warning; the server never crashes on bad input.
 
 One daily weekday email per subscriber — "N things need you" (≤3 ranked
 items: overdue work they own, pending decisions, top P×I risks on their
-projects) plus a chases section. **Dry-run by default**: renders the digest
-to `pulse-out/` and sends nothing. Real send requires `PULSE_SEND=1` plus a
-Postmark server token supplied at runtime (never committed).
+projects) plus a chases section. A `cadence: "ritual"` subscriber instead
+gets the Monday brief (what slipped + decisions you owe) and the Friday
+brief (paste-ready status drafts + the week's changes). **Dry-run by
+default**: renders the digest to `pulse-out/` and sends nothing. Real send
+requires `PULSE_SEND=1` plus a provider credential supplied at runtime
+(never committed).
 
 ```bash
 PMO_PROJECTS_DIR=./data PULSE_SUBSCRIPTIONS=./subscriptions.sample.json node pulse.js
