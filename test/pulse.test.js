@@ -20,6 +20,7 @@ import {
   sendViaAgentmail,
   resolveProvider,
   writeDryRun,
+  SEND_TIMEOUT_MS,
   POSTMARK_URL,
   AGENTMAIL_URL
 } from '../lib/pulse/provider.js';
@@ -598,8 +599,44 @@ describe('provider send gate', () => {
     assert.ok(nonJson.error.includes('502'));
   });
 
-  test('resolveProvider: default postmark; only exact agentmail selects AgentMail', () => {
-    assert.equal(resolveProvider({}), 'postmark');
+  test('sendViaPostmark: every send carries a bounded abort signal (PR #20 R2)', async () => {
+    const calls = [];
+    const result = await sendViaPostmark({
+      fetchImpl: async (url, options) => {
+        calls.push(options);
+        return { ok: true, json: async () => ({ MessageID: 'm' }) };
+      },
+      token: 'tok', from: 'a@b.co', to: 'x@y.io', subject: 's', html: 'h', text: 't'
+    });
+    assert.equal(result.ok, true);
+    assert.ok(calls[0].signal instanceof AbortSignal, 'fetch options must include an AbortSignal');
+    assert.equal(calls[0].signal.aborted, false);
+  });
+
+  test('sendViaPostmark: a provider that never responds becomes a timeout result, not a hang (PR #20 R2)', async () => {
+    const neverRespond = (url, options) => new Promise((resolve, reject) => {
+      // A real in-flight request holds the event loop open (open socket);
+      // simulate that so the unref'd AbortSignal.timeout timer can fire.
+      const keepAlive = setInterval(() => {}, 50);
+      // Undici behavior: the aborting signal rejects the in-flight request
+      // with signal.reason (a TimeoutError DOMException for timeouts).
+      options.signal.addEventListener('abort', () => {
+        clearInterval(keepAlive);
+        reject(options.signal.reason);
+      }, { once: true });
+    });
+    const result = await sendViaPostmark({
+      fetchImpl: neverRespond, token: 'tok', from: 'a@b.co', to: 'x@y.io',
+      subject: 's', html: 'h', text: 't', timeoutMs: 20
+    });
+    assert.deepEqual(result, { ok: false, error: 'send timed out after 20ms' });
+  });
+
+  test('SEND_TIMEOUT_MS default is bounded (15s) so cron runs cannot hang indefinitely', () => {
+    assert.equal(SEND_TIMEOUT_MS, 15000);
+  });
+
+  test('resolveProvider: default postmark; only exact agentmail selects AgentMail', () => {    assert.equal(resolveProvider({}), 'postmark');
     assert.equal(resolveProvider({ PULSE_PROVIDER: 'postmark' }), 'postmark');
     assert.equal(resolveProvider({ PULSE_PROVIDER: 'postmakr' }), 'postmark'); // typo fails toward dry-run, not a crash
     assert.equal(resolveProvider({ PULSE_PROVIDER: 'agentmail' }), 'agentmail');
@@ -669,6 +706,21 @@ describe('provider send gate', () => {
     });
     assert.equal(nonJson.ok, false);
     assert.ok(nonJson.error.includes('500'));
+  });
+
+  test('sendViaAgentmail: a provider that never responds becomes a timeout result, not a hang (PR #20 R2)', async () => {
+    const neverRespond = (url, options) => new Promise((resolve, reject) => {
+      const keepAlive = setInterval(() => {}, 50);
+      options.signal.addEventListener('abort', () => {
+        clearInterval(keepAlive);
+        reject(options.signal.reason);
+      }, { once: true });
+    });
+    const result = await sendViaAgentmail({
+      fetchImpl: neverRespond, apiKey: 'k', inboxId: 'i', from: 'a@b.co',
+      to: 'x@y.io', subject: 's', html: 'h', text: 't', timeoutMs: 20
+    });
+    assert.deepEqual(result, { ok: false, error: 'send timed out after 20ms' });
   });
 
   test('writeDryRun persists html/txt/json under outDir/date and returns paths', () => {
