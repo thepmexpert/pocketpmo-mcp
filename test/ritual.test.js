@@ -230,6 +230,28 @@ describe('friday brief content', () => {
     assert.equal(closed.open, false);
   });
 
+  test('milestone with progress >= 1 in window is not "still open"', () => {
+    // The fraction-progress completion rule (needs.js, slippedItem) must also
+    // govern the change list, or the Friday brief contradicts its own drafts.
+    const project = {
+      id: 10, name: 'Northgate Platform Migration', status: 'active',
+      activities: [], decisions: [], risks: [],
+      evmData: {
+        milestones: [
+          { id: 'm1', name: 'Completed milestone came due', status: 'in_progress', progress: 1, dueDate: '2026-09-30' },
+          { id: 'm2', name: 'Partial milestone came due', status: 'in_progress', progress: 0.5, dueDate: '2026-09-30' }
+        ]
+      }
+    };
+    const changes = buildRitualBrief({ subscriber: PM, projects: [project], now: FRIDAY, kind: 'friday' }).changes;
+    const done = changes.find((c) => c.title === 'Completed milestone came due');
+    const partial = changes.find((c) => c.title === 'Partial milestone came due');
+    assert.ok(done, 'completed milestone still counts as a dated change');
+    assert.equal(done.open, false);
+    assert.ok(partial, 'partial milestone counts as a dated change');
+    assert.equal(partial.open, true);
+  });
+
   test('updatedAt-style timestamps count as changes when present', () => {
     const project = {
       id: 11, name: 'Northgate Platform Migration', status: 'active',
@@ -294,8 +316,10 @@ describe('friday brief content', () => {
 describe('ritual fail-soft and rendering', () => {
   test('malformed projects never throw', () => {
     const garbage = [null, undefined, 42, 'nope', { name: 7 }, { activities: 'not-an-array' }];
+    // Empty project filter = all projects, so every entry reaches the
+    // tolerant extractors instead of being filtered out by isReferencedProject.
     for (const kind of ['monday', 'friday']) {
-      const brief = buildRitualBrief({ subscriber: PM, projects: garbage, now: FRIDAY, kind });
+      const brief = buildRitualBrief({ subscriber: { ...PM, projects: [] }, projects: garbage, now: FRIDAY, kind });
       assert.equal(brief.kind, kind);
       assert.deepEqual(brief.slipped, []);
     }
@@ -366,6 +390,27 @@ describe('ritual fail-soft and rendering', () => {
     });
     assert.ok(text.includes('Clean slate.'));
   });
+
+  test('renderer: monday subject uses pre-cap totals, not capped array lengths', () => {
+    const slipped = Array.from({ length: 12 }, (_, i) => ({
+      title: `Slip ${i + 1}`, projectName: 'P', owner: 'X', mine: false, days: i + 1
+    }));
+    const brief = {
+      kind: 'monday',
+      slipped: slipped.slice(0, MAX_SLIPPED),
+      slippedTotal: slipped.length,
+      decisions: [],
+      decisionsTotal: 0,
+      drafts: [],
+      changes: [],
+      changedTotal: 0
+    };
+    const { subject } = renderRitualBrief({
+      brief, subscriber: PM, now: MONDAY, fromName: 'PocketPMO Pulse', fromEmail: 'pulse@pocketpmo.com', unsubscribeUrl: ''
+    });
+    assert.ok(subject.includes('12 slipped'), subject);
+    assert.ok(!subject.includes('8 slipped'), subject);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -377,7 +422,7 @@ describe('runPulse ritual end-to-end', () => {
   // preserving across lookalike addresses), so files land as name%40domain.ext
   const slug = encodeURIComponent(PM.email).toLowerCase();
 
-  test('Friday run writes a friday brief; Tuesday skips; forced Tuesday defaults to monday brief', async () => {
+  test('Friday run writes a friday brief; Tuesday skips; forced Tuesday defaults to monday brief, PULSE_BRIEF=friday overrides', async () => {
     const dir = makeTempDir({
       'project.json': JSON.stringify(sampleProject),
       'subs.json': JSON.stringify({ subscribers: [PM] })
@@ -413,6 +458,17 @@ describe('runPulse ritual end-to-end', () => {
     assert.equal(forced.dryRun, true);
     const forcedText = fs.readFileSync(path.join(dir, 'out', '2026-09-29', `${slug}.txt`), 'utf8');
     assert.ok(forcedText.includes('Status drafts — paste-ready:'));
+
+    // Forced Tuesday with no PULSE_BRIEF → weekday default (Tuesday ≠ Friday)
+    // = monday brief, end-to-end.
+    fs.rmSync(path.join(dir, 'out'), { recursive: true, force: true });
+    const forcedMonday = await runPulse({
+      ...baseEnv, PULSE_DATE: '2026-09-29', PULSE_TZ: 'UTC', PULSE_FORCE: '1'
+    });
+    assert.equal(forcedMonday.written, 3);
+    const forcedMondayText = fs.readFileSync(path.join(dir, 'out', '2026-09-29', `${slug}.txt`), 'utf8');
+    assert.ok(forcedMondayText.includes('What slipped:'));
+    assert.ok(forcedMondayText.includes('Decisions you owe:'));
   });
 
   test('PULSE_FORCE must be exactly "1" — "0"/"true" do not bypass the cadence guard', async () => {
