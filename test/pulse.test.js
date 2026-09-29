@@ -451,6 +451,24 @@ describe('buildDigestItems', () => {
     );
   });
 
+  test('missing titles fall back — the literal string "null" never renders (PR #20 R3)', () => {
+    const projects = [
+      project({
+        activities: [{ owner: 'Priya N.', dueDate: '2026-09-21' }],
+        evmData: { milestones: [{ progress: 0, owner: 'Priya N.', dueDate: '2026-09-21' }] },
+        decisions: [{ owner: 'D. Byrne' }],
+        asks: [{ from: 'Priya N.', requestedOn: '2026-09-10', to: 'D. Byrne' }]
+      })
+    ];
+    const { items, chases } = buildDigestItems({ subscriber: BYRNE, projects, now: NOW });
+    const whats = [...items.map((i) => i.title), ...chases.map((c) => c.what)];
+    assert.ok(whats.includes('Untitled activity'), JSON.stringify(whats));
+    assert.ok(whats.includes('Untitled milestone'), JSON.stringify(whats));
+    assert.ok(whats.includes('Untitled decision'), JSON.stringify(whats));
+    assert.ok(whats.includes('Unspecified ask'), JSON.stringify(whats));
+    assert.ok(!whats.includes('null'), 'the string "null" must never render');
+  });
+
   test('fail-soft: hostile project shapes never throw', () => {
     const projects = [
       null,
@@ -854,6 +872,7 @@ describe('runPulse', () => {
       // pin the send gate closed so dry-run guarantees never depend on the
       // ambient shell (staging runs with PULSE_SEND=1 + a real token);
       // send-path tests override these explicitly via `extra`.
+      PULSE_PROVIDER: 'postmark',
       PULSE_SEND: '',
       POSTMARK_SERVER_TOKEN: '',
       ...extra
