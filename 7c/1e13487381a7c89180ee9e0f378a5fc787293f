@@ -1,0 +1,50 @@
+pulse.js
+  s_a7f23f7f1446e4::t_4a93a80e1c5643 214-218
+test/pulse.test.js
+  s_0bc19d0e89f6c5::t_7ab5bfb74ab30e 435-445
+  s_64d05b2d2e19a9::t_896cee61441ec3 328-348
+  s_a7f23f7f1446e4::t_c6eb96696acceb 841-866
+  s_983382e4cb0c23::t_c2c16975c2f41a 402-419
+  s_a7f23f7f1446e4::t_636c45b274e84b 809,823-826
+  s_a7f23f7f1446e4::t_ebb0f0834f20e7 840
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "7c1e13487381a7c89180ee9e0f378a5fc787293f",
+  "prompts": {},
+  "sessions": {
+    "s_0bc19d0e89f6c5": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f136f9d87ffeN81MKocBpviqxD",
+        "model": "glm-5.3-flash"
+      },
+      "human_author": "David <david4david4david4@gmail.com>"
+    },
+    "s_64d05b2d2e19a9": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f136fae0ffferh05ne6IrItnRW",
+        "model": "glm-5.3-flash"
+      },
+      "human_author": "David <david4david4david4@gmail.com>"
+    },
+    "s_983382e4cb0c23": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f136fa8e0ffexs4KPNWGmM46fy",
+        "model": "glm-5.3-flash"
+      },
+      "human_author": "David <david4david4david4@gmail.com>"
+    },
+    "s_a7f23f7f1446e4": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f136fa382ffe1FOK6o3MoW4sMu",
+        "model": "glm-5.3-flash"
+      },
+      "human_author": "David <david4david4david4@gmail.com>"
+    }
+  }
+}
