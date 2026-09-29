@@ -1,0 +1,21 @@
+test/pulse.test.js
+  s_88706364b72d62::t_b95e06679b8b43 981-1023
+pulse.js
+  s_88706364b72d62::t_9b93fca3e79ad9 141-156,160-161
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "4f6c792fd0191ce875ce9e76b1136aef1af50327",
+  "prompts": {},
+  "sessions": {
+    "s_88706364b72d62": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f12f00bb5ffen8JZNXaGmG3gUq",
+        "model": "glm-5.3-flash"
+      },
+      "human_author": "David <david4david4david4@gmail.com>"
+    }
+  }
+}
