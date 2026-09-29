@@ -138,18 +138,27 @@ async function deliver(ctx, subscriber, digest) {
 
 export async function runPulse(env = process.env) {
   // The shared loader (lib/projects.js) and the send gate read the live
-  // process.env dynamically. Overlay the managed keys from the `env`
-  // argument so the CLI's environment — and tests driving runPulse with a
-  // plain object — configure the whole pipeline, not just this module.
-  // SNAPSHOT + RESTORE in a finally: one run must never leak its config
-  // into the next (back-to-back runPulse calls, e.g. in tests, would
-  // otherwise inherit a previous run's PULSE_SEND/token — exactly the kind
-  // of state bleed that turns a dry-run into a surprise send).
-  const managedKeys = Object.keys(env).filter((key) => /^(PMO_|PULSE_|POSTMARK_|AGENTMAIL_)/.test(key));
+  // process.env dynamically. Overlay the MANAGED keys — the union of the
+  // managed namespace present in the `env` argument AND in the live
+  // process.env — so the CLI's environment and tests driving runPulse with
+  // a plain object configure the whole pipeline, not just this module.
+  // R4 (P1): the union matters for the reverse direction too. Keying the
+  // overlay on `env` alone left ambient PULSE_SEND/POSTMARK_SERVER_TOKEN
+  // live whenever the supplied env OMITTED the send settings, so a test or
+  // embedded caller inherited a real-send configuration from its shell.
+  // Keys absent (or undefined) in `env` are CLEARED for the duration of the
+  // run — delete, not `= undefined`, which Node coerces to the string
+  // "undefined". SNAPSHOT + RESTORE in a finally: one run must never leak
+  // its config into the next (back-to-back runPulse calls, e.g. in tests,
+  // would otherwise inherit a previous run's PULSE_SEND/token — exactly
+  // the kind of state bleed that turns a dry-run into a surprise send).
+  const MANAGED_KEY = /^(PMO_|PULSE_|POSTMARK_|AGENTMAIL_)/;
+  const managedKeys = [...new Set([...Object.keys(env), ...Object.keys(process.env)])].filter((key) => MANAGED_KEY.test(key));
   const snapshot = {};
   for (const key of managedKeys) {
     snapshot[key] = process.env[key];
-    process.env[key] = env[key];
+    if (env[key] === undefined) delete process.env[key];
+    else process.env[key] = env[key];
   }
   try {
     return await pulseBody(env);

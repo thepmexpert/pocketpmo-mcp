@@ -978,6 +978,49 @@ describe('runPulse', () => {
     }
   });
 
+  test('ambient send-gate env cannot leak into a runPulse call whose env omits send settings (R4 P1)', async () => {
+    const dir = makeTempDir({ 'subs.json': '[{"email":"x@y.io"}]' });
+    // Simulate the staging shell: AMBIENT process.env carries a live send
+    // configuration. The supplied env below deliberately OMITS
+    // PULSE_SEND/POSTMARK_SERVER_TOKEN — before the R4 fix the overlay only
+    // touched managed keys present in the supplied env, so the run inherited
+    // the ambient send configuration and could have really sent.
+    const ambient = { PULSE_SEND: '1', PULSE_PROVIDER: 'postmark', POSTMARK_SERVER_TOKEN: 'ambient-real-token' };
+    const savedAmbient = {};
+    for (const key of Object.keys(ambient)) {
+      savedAmbient[key] = process.env[key];
+      process.env[key] = ambient[key];
+    }
+    let networkCalls = 0;
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () => { networkCalls += 1; return { ok: true, json: async () => ({}) }; };
+    try {
+      const summary = await runPulse({
+        PMO_PROJECTS_DIR: dataDir,
+        PULSE_SUBSCRIPTIONS: path.join(dir, 'subs.json'),
+        PULSE_OUT_DIR: path.join(dir, 'out'),
+        PULSE_DATE: '2026-09-29T09:00:00Z',
+        PULSE_FORCE: '1'
+        // no PULSE_SEND / POSTMARK_SERVER_TOKEN / PULSE_PROVIDER here
+      });
+      assert.equal(summary.dryRun, true, 'omitting send settings must force dry-run even with ambient PULSE_SEND=1 + token');
+      assert.equal(summary.sent, 0);
+      assert.equal(summary.written, 3);
+      assert.equal(networkCalls, 0, 'no provider fetch may fire');
+      // snapshot/restore holds for ambient keys too: the run cleared them
+      // for its duration, then restored exactly what the shell had.
+      assert.equal(process.env.PULSE_SEND, '1');
+      assert.equal(process.env.PULSE_PROVIDER, 'postmark');
+      assert.equal(process.env.POSTMARK_SERVER_TOKEN, 'ambient-real-token');
+    } finally {
+      globalThis.fetch = originalFetch;
+      for (const [key, value] of Object.entries(savedAmbient)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
   test('real send with flag + token delivers via provider', async () => {
     const dir = makeTempDir({ 'subs.json': '[{"email":"x@y.io"}]' });
     const calls = [];
