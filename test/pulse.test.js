@@ -187,6 +187,17 @@ describe('needs primitives', () => {
     assert.ok(parseDate('2026-12-31') instanceof Date);
   });
 
+  test('parseDate applies the 2000–2100 guard to strings too (epoch-default exports)', () => {
+    // new Date(0).toISOString() — a common JS epoch default in client
+    // exports; unguarded it parses fine and fabricates a ~20,500-day
+    // overdue item that would top every digest it appears in.
+    assert.equal(parseDate('1970-01-01T00:00:00.000Z'), null);
+    assert.equal(parseDate('1999-12-31'), null);        // just below the guard
+    assert.equal(parseDate('2150-06-01'), null);        // above the guard
+    assert.ok(parseDate('2000-01-01') instanceof Date); // inclusive lower bound
+    assert.ok(parseDate('2099-12-31') instanceof Date); // inclusive upper edge
+  });
+
   test('calendarDays is calendar-based, DST-safe', () => {
     // Europe/Dublin DST boundary 2026-10-25: 86400000-ms math drifts by an
     // hour; calendar-day math must not. From Mar 27 2026 (DST start) the
