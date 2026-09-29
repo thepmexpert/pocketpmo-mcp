@@ -138,6 +138,14 @@ describe('needs primitives', () => {
     assert.equal(parseDate(null), null);
   });
 
+  test('parseDate rejects impossible date-only values (no JS day-normalization)', () => {
+    assert.equal(parseDate('2026-02-30'), null);   // would normalize to Mar 2
+    assert.equal(parseDate('2026-04-31'), null);   // would normalize to May 1
+    assert.equal(parseDate('2025-02-29'), null);   // non-leap year
+    assert.ok(parseDate('2024-02-29') instanceof Date); // leap day stays valid
+    assert.ok(parseDate('2026-12-31') instanceof Date);
+  });
+
   test('calendarDays is calendar-based, DST-safe', () => {
     // Europe/Dublin DST boundary 2026-10-25: 86400000-ms math drifts by an
     // hour; calendar-day math must not. From Mar 27 2026 (DST start) the
