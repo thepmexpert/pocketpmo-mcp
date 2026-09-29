@@ -337,6 +337,35 @@ describe('buildDigestItems', () => {
     assert.equal(items.length, 0);
   });
 
+  test('risks: absent or null status counts as open', () => {
+    const projects = [
+      project({
+        risks: [
+          { name: 'No status field', probability: 3, impact: 3, owner: 'D. Byrne' },
+          { name: 'Null status', probability: 2, impact: 2, status: null, owner: 'D. Byrne' }
+        ]
+      })
+    ];
+    const { items } = buildDigestItems({ subscriber: BYRNE, projects, now: NOW });
+    assert.deepEqual(items.map((i) => i.title), ['No status field', 'Null status']);
+  });
+
+  test('risks missing probability/impact are rejected, not coerced to score 0', () => {
+    const projects = [
+      project({
+        risks: [
+          { name: 'No numbers', status: 'open', owner: 'D. Byrne' },
+          { name: 'Empty strings', probability: '', impact: '', status: 'open', owner: 'D. Byrne' },
+          { name: 'Null impact', probability: 4, impact: null, status: 'open', owner: 'D. Byrne' },
+          { name: 'Valid', probability: 2, impact: 3, status: 'open', owner: 'D. Byrne' }
+        ]
+      })
+    ];
+    const { items } = buildDigestItems({ subscriber: BYRNE, projects, now: NOW });
+    assert.equal(items.length, 1);
+    assert.equal(items[0].title, 'Valid');
+  });
+
   test('chases: explicit asks owed to the recipient, ranked by days outstanding', () => {
     const projects = [
       project({
