@@ -314,6 +314,24 @@ describe('buildDigestItems', () => {
     assert.equal(items[0].title, 'Late milestone');
   });
 
+  test('hostile milestone progress never throws; coerced progress treated as incomplete', () => {
+    // {"toString":null} is valid JSON but Number() on it throws TypeError —
+    // progress must go through asString so the digest never aborts.
+    const projects = [
+      project({
+        evmData: {
+          milestones: [
+            { id: 'm1', name: 'Hostile progress', progress: { toString: null }, owner: 'D. Byrne', dueDate: '2026-09-01' },
+            { id: 'm2', name: 'String progress', progress: '0.5', owner: 'D. Byrne', dueDate: '2026-09-02' },
+            { id: 'm3', name: 'Numeric-string done', progress: '1', owner: 'D. Byrne', dueDate: '2026-09-02' }
+          ]
+        }
+      })
+    ];
+    const { items } = buildDigestItems({ subscriber: BYRNE, projects, now: NOW });
+    assert.deepEqual(items.map((i) => i.title), ['Hostile progress', 'String progress']);
+  });
+
   test('decisions with missing status are pending; closed vocabulary is not', () => {
     const projects = [
       project({
@@ -416,16 +434,21 @@ describe('buildDigestItems', () => {
             { id: 'm2', name: 'My late milestone', progress: 0.5, owner: 'D. Byrne', dueDate: '2026-09-21' },
             { id: 'm3', name: 'Done late milestone', progress: 1, owner: 'Priya N.', dueDate: '2026-09-21' },
             { id: 'm4', name: 'Closed late milestone', status: 'done', owner: 'Priya N.', dueDate: '2026-09-21' },
-            { id: 'm5', name: 'Not yet due milestone', progress: 0, owner: 'Priya N.', dueDate: '2026-10-21' }
+            { id: 'm5', name: 'Not yet due milestone', progress: 0, owner: 'Priya N.', dueDate: '2026-10-21' },
+            { id: 'm6', name: 'Hostile progress chase', progress: { toString: null }, owner: 'Priya N.', dueDate: '2026-09-21' }
           ]
         }
       })
     ];
     const { chases } = buildDigestItems({ subscriber: BYRNE, projects, now: NOW });
-    assert.equal(chases.length, 1);
+    assert.equal(chases.length, 2);
     assert.equal(chases[0].who, 'Priya N.');
     assert.equal(chases[0].what, 'Their late milestone');
     assert.equal(chases[0].days, 8);
+    assert.deepEqual(
+      chases.find((c) => c.what === 'Hostile progress chase'),
+      { who: 'Priya N.', what: 'Hostile progress chase', projectName: 'Alpha', days: 8 }
+    );
   });
 
   test('fail-soft: hostile project shapes never throw', () => {
@@ -859,6 +882,21 @@ describe('runPulse', () => {
     const summary = await runPulse({ ...pulseEnv(dir), PULSE_DATE: '2026-10-03T09:00:00Z', PULSE_FORCE: '' });
     assert.equal(summary.skipped, 1);
     assert.equal(summary.written, 0);
+  });
+
+  test('PULSE_FORCE must be exactly "1" to bypass the weekend guard (R2 P1)', async () => {
+    const dir = makeTempDir({
+      'subs.json': JSON.stringify({ subscribers: [{ email: 'x@y.io', cadence: 'daily' }] })
+    });
+    // "0" is truthy as a string: a misconfigured weekend production run
+    // (PULSE_FORCE=0) must still respect the cadence guard.
+    const zero = await runPulse({ ...pulseEnv(dir), PULSE_DATE: '2026-10-03T09:00:00Z', PULSE_FORCE: '0' });
+    assert.equal(zero.skipped, 1);
+    assert.equal(zero.written, 0);
+    // Exact '1' still overrides for staging tests.
+    const one = await runPulse({ ...pulseEnv(dir), PULSE_DATE: '2026-10-03T09:00:00Z', PULSE_FORCE: '1' });
+    assert.equal(one.skipped, 0);
+    assert.equal(one.written, 3);
   });
 
   test('send path requires flag + token; dry-run writes when gate closed', async () => {
