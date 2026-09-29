@@ -287,6 +287,24 @@ describe('ritual fail-soft and rendering', () => {
     assert.ok(text.includes('(yours)'));
   });
 
+  test('renderer normalizes malformed brief entries instead of throwing', () => {
+    const brief = {
+      kind: 'monday',
+      slipped: [null, 42, { title: 'Real slip', projectName: 'P', owner: 'X', mine: false, days: 2 }],
+      decisions: [undefined, 'bad', { title: 'Real decision', projectName: 'P', days: 1 }],
+      drafts: [null, { projectName: 'P', text: 'draft text' }],
+      changes: [7, null, { kind: 'came-due', title: 'T', projectName: 'P', dueDate: FRIDAY, open: true }],
+      slippedTotal: 3,
+      decisionsTotal: 3,
+      changedTotal: 3
+    };
+    const { text } = renderRitualBrief({
+      brief, subscriber: PM, now: MONDAY, fromName: 'PocketPMO Pulse', fromEmail: 'pulse@pocketpmo.com', unsubscribeUrl: ''
+    });
+    assert.ok(text.includes('Real slip'));
+    assert.ok(text.includes('Real decision'));
+  });
+
   test('renderer: friday includes paste-ready draft and honest empty changes', () => {
     const quiet = { id: 19, name: 'Northgate Platform Migration', status: 'active', activities: [], decisions: [], risks: [], evmData: {} };
     const brief = buildRitualBrief({ subscriber: PM, projects: [quiet], now: FRIDAY, kind: 'friday' });
