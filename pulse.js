@@ -246,7 +246,10 @@ async function pulseBody(env) {
         continue;
       }
       if (subscriber.cadence === 'ritual' && ritualBrief === null) {
-        ritualBrief = resolveRitualBriefKind(env, now);
+        // PULSE_BRIEF is a staging/forced-run override (cubic PR #21 R1 P1):
+        // an ambient value must not turn a production Monday into a Friday
+        // brief, so only runs forced with exact '1' may read it.
+        ritualBrief = resolveRitualBriefKind(env.PULSE_FORCE === '1' ? env : {}, now);
         if (ritualBrief.warning) summary.warnings.push(ritualBrief.warning);
       }
       if (load === null) {

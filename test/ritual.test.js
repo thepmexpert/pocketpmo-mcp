@@ -553,4 +553,25 @@ describe('runPulse ritual end-to-end', () => {
     assert.ok(text.includes('Target architecture design'));
     assert.ok(text.includes('(yours)'));
   });
+
+  test('ambient PULSE_BRIEF without PULSE_FORCE never overrides the weekday brief', async () => {
+    // PULSE_BRIEF is a staging/forced-run override only: a production Monday
+    // run with an ambient PULSE_BRIEF=friday must still write the monday brief.
+    const dir = makeTempDir({
+      'project.json': JSON.stringify(sampleProject),
+      'subs.json': JSON.stringify({ subscribers: [PM] })
+    });
+    const summary = await runPulse({
+      PMO_PROJECTS_DIR: dir,
+      PULSE_SUBSCRIPTIONS: path.join(dir, 'subs.json'),
+      PULSE_OUT_DIR: path.join(dir, 'out'),
+      PULSE_DATE: '2026-09-28',
+      PULSE_TZ: 'UTC',
+      PULSE_BRIEF: 'friday'
+    });
+    assert.equal(summary.written, 3);
+    const text = fs.readFileSync(path.join(dir, 'out', '2026-09-28', `${slug}.txt`), 'utf8');
+    assert.ok(text.includes('What slipped:'), 'monday brief expected');
+    assert.ok(!text.includes('Status drafts — paste-ready:'), 'friday brief must not leak into a production Monday run');
+  });
 });
