@@ -169,6 +169,14 @@ async function pulseBody(env) {
     warnings: [...roster.warnings]
   };
 
+  // Lazy + cached (CodeRabbit PR #20 R1): the portfolio is scanned once,
+  // on the FIRST due subscriber. Skipped-only runs (weekend, weekly
+  // cadence) never touch the projects directory. Per-subscriber fatal
+  // handling is preserved: an unreadable projects dir records an error for
+  // EVERY due subscriber rather than returning early, so the summary shows
+  // exactly who was affected.
+  let projects = null;
+  let load = null;
   for (const subscriber of roster.subscribers) {
     let outcome;
     try {
@@ -176,17 +184,21 @@ async function pulseBody(env) {
         summary.skipped += 1;
         continue;
       }
-      const { projects, load } = collectProjects();
+      if (load === null) {
+        ({ projects, load } = collectProjects());
+        if (!load.fatal) {
+          for (const warning of load.warnings) {
+            const line = `skipped project file: ${warning}`;
+            if (!summary.warnings.includes(line)) summary.warnings.push(line);
+          }
+        }
+      }
       if (load.fatal) {
         // An unreadable projects directory is a portfolio-level failure:
         // every digest would be silently empty, which is worse than a
         // recorded error. Per-file malformed projects still degrade to
         // warnings inside load (never fatal) — fail-soft holds.
         throw new Error(load.fatal);
-      }
-      for (const warning of load.warnings) {
-        const line = `skipped project file: ${warning}`;
-        if (!summary.warnings.includes(line)) summary.warnings.push(line);
       }
       const { items, chases } = buildDigestItems({ subscriber, projects, now });
       const digest = renderDigest({

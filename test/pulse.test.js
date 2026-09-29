@@ -466,7 +466,23 @@ describe('provider send gate', () => {
     const meta = JSON.parse(fs.readFileSync(result.written[2], 'utf8'));
     assert.equal(meta.email, BYRNE.email);
     assert.ok(result.written[0].includes('2026-09-29'));
-    assert.ok(path.basename(result.written[0]).startsWith('d.byrne@example.com'));
+    // Identity-preserving slug: encodeURIComponent keeps @ (and +) distinct.
+    assert.equal(path.basename(result.written[0]), 'd.byrne%40example.com.html');
+  });
+
+  test('distinct emails (plus-tag vs underscore variants) never share a slug', () => {
+    // CodeRabbit PR #20 R1: user+tag@example.com and user_tag@example.com
+    // are distinct recipients; folding both to user_tag@example.com made
+    // dry-run files overwrite each other.
+    const outDir = makeTempDir({});
+    const digest = renderDigest({ subscriber: BYRNE, items: [], chases: [], now: NOW, ...FROM });
+    const plus = writeDryRun({ outDir, now: NOW, subscriber: { ...BYRNE, email: 'user+tag@example.com' }, digest });
+    const under = writeDryRun({ outDir, now: NOW, subscriber: { ...BYRNE, email: 'user_tag@example.com' }, digest });
+    assert.equal(plus.ok, true);
+    assert.equal(under.ok, true);
+    const plusSet = new Set(plus.written);
+    for (const file of under.written) assert.ok(!plusSet.has(file), `collision: ${file}`);
+    assert.ok(fs.existsSync(plus.written[0]), 'plus-tag digest intact after second write');
   });
 });
 
@@ -592,6 +608,48 @@ describe('runPulse', () => {
     assert.ok(summary.warnings.length >= 2); // malformed files reported
   });
 
+  test('lazy load: skipped-only runs never touch the projects directory', async () => {
+    const dir = makeTempDir({
+      'subs.json': JSON.stringify({ subscribers: [{ email: 'x@y.io', cadence: 'daily' }] })
+    });
+    // PMO_PROJECTS_DIR does not exist — a scan would record a fatal and
+    // produce per-subscriber errors. The cadence guard (Saturday, no
+    // PULSE_FORCE) must skip before any scan happens.
+    const summary = await runPulse({
+      ...pulseEnv(dir),
+      PMO_PROJECTS_DIR: '/nonexistent/pulse-projects-dir',
+      PULSE_DATE: '2026-10-03T09:00:00Z', // Saturday
+      PULSE_FORCE: ''
+    });
+    assert.equal(summary.ok, true);
+    assert.equal(summary.skipped, 1);
+    assert.equal(summary.errors.length, 0);
+    assert.equal(summary.written, 0);
+  });
+
+  test('cached load: two due subscribers produce one scan; fatal dir errors per subscriber', async () => {
+    const dir = makeTempDir({
+      'subs.json': JSON.stringify({
+        subscribers: [
+          { email: 'a@x.io', cadence: 'daily' },
+          { email: 'b@x.io', cadence: 'daily' }
+        ]
+      })
+    });
+    const summary = await runPulse({
+      ...pulseEnv(dir),
+      PMO_PROJECTS_DIR: '/nonexistent/pulse-projects-dir',
+      PULSE_FORCE: '1'
+    });
+    assert.equal(summary.ok, true);
+    assert.equal(summary.recipients, 2);
+    // One cached load, fatal preserved per subscriber: both recipients get
+    // an error entry, neither crashes the run, nothing is written.
+    assert.equal(summary.errors.length, 2);
+    assert.ok(summary.errors.every((e) => e.includes('not readable')));
+    assert.equal(summary.written, 0);
+  });
+
   test('unreadable roster: ok=false so cron observability catches it', async () => {
     const summary = await runPulse(pulseEnv(makeTempDir({}), { PULSE_SUBSCRIPTIONS: '/nonexistent/subs.json' }));
     assert.equal(summary.ok, false);
@@ -622,6 +680,6 @@ describe('runPulse', () => {
     assert.equal(summary.ok, true);
     assert.equal(summary.dryRun, true);
     assert.equal(summary.sent, 0);
-    assert.ok(fs.existsSync(path.join(out, '2026-09-29', 'smoke@x.io.html')));
+    assert.ok(fs.existsSync(path.join(out, '2026-09-29', 'smoke%40x.io.html')));
   });
 });
