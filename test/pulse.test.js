@@ -451,6 +451,30 @@ describe('buildDigestItems', () => {
     );
   });
 
+  test('missing/null owner and title never leak the string "null" into chases (R3 P2)', () => {
+    const projects = [
+      project({
+        activities: [{ id: 'a1', name: 'Their late task', owner: null, dueDate: '2026-09-20' }],
+        evmData: {
+          milestones: [
+            { id: 'm1', progress: 0, owner: 'Priya N.', dueDate: '2026-09-21' },            // no title field at all
+            { id: 'm2', name: null, progress: 0, owner: 'Priya N.', dueDate: '2026-09-21' } // null title
+          ]
+        },
+        asks: [{ from: null, to: 'D. Byrne', what: 'Ask with no from', requestedOn: '2026-09-15' }]
+      })
+    ];
+    const { chases } = buildDigestItems({ subscriber: BYRNE, projects, now: NOW });
+    // ownerless items are skipped entirely — never chased as who:"null"
+    assert.ok(!chases.some((c) => c.who === 'null'));
+    assert.ok(!chases.some((c) => c.who === ''));
+    // titleless milestones fall back to the Untitled label, not "null"
+    assert.deepEqual(
+      chases.map((c) => c.what).sort(),
+      ['Untitled milestone', 'Untitled milestone']
+    );
+  });
+
   test('missing titles fall back — the literal string "null" never renders (PR #20 R3)', () => {
     const projects = [
       project({
