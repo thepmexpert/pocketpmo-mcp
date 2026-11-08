@@ -635,6 +635,44 @@ describe('computeCalibrationHistory — response record', () => {
     assert.equal(t.trendDelta, 0);
   });
 
+  test('long-fraction offsetless timestamps interpret as UTC (host-independent)', () => {
+    // Date.parse accepts >3-digit fractions in some engines and treats the
+    // offsetless string as LOCAL time; the key helper normalizes it to UTC.
+    const m = computeProjectCalibration(
+      project([
+        resolved('2026-06-01T11:30:00.123456', 2, -5),
+        resolved('2026-06-01T11:00:00.000Z', -4, -7),
+        resolved('2026-06-08T09:00:00.000Z', 6, -9),
+        resolved('2026-06-15T09:00:00.000Z', -7, -11)
+      ])
+    );
+    // UTC order: 11:00Z, 11:30.123456, 06-08, 06-15. Halves [2,-4] abs 3 |
+    // [6,-7] abs 6.5 -> delta 3.5 regardless of the host's timezone.
+    const t = m.series.defendable.precisionTrend;
+    assert.equal(t.firstHalfCount, 2);
+    assert.equal(t.secondHalfCount, 2);
+    assert.equal(t.trendDelta, 3.5);
+  });
+
+  test('slash-separated timestamps interpret as UTC (host-independent)', () => {
+    const m = computeProjectCalibration(
+      project([
+        resolved('2026/06/08 09:00', 2, -5),
+        resolved('2026-06-01T11:00:00.000Z', -4, -7),
+        resolved('2026-06-15T09:00:00.000Z', 6, -9),
+        resolved('2026-06-22T09:00:00.000Z', -7, -11)
+      ])
+    );
+    // UTC order: 06-01, 06-08(slash), 06-15, 06-22. Halves [-4,2] abs 3 |
+    // [6,-7] abs 6.5 -> delta 3.5 regardless of the host's timezone.
+    const t = m.series.defendable.precisionTrend;
+    assert.equal(t.firstHalfCount, 2);
+    assert.equal(t.secondHalfCount, 2);
+    assert.equal(t.trendDelta, 3.5);
+    assert.equal(m.span.firstCapturedAt, '2026-06-01T11:00:00.000Z');
+    assert.equal(m.span.lastCapturedAt, '2026-06-22T09:00:00.000Z');
+  });
+
   test('textual-zone timestamps (RFC 2822 style) parse instead of being corrupted', () => {
     // Round-3 Cubic: the round-2 Z-append corrupted valid textual-zone
     // timestamps ('...GMT' + 'Z' = unparseable). Only offsetless ISO
