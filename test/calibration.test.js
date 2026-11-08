@@ -635,6 +635,37 @@ describe('computeCalibrationHistory — response record', () => {
     assert.equal(t.trendDelta, 0);
   });
 
+  test('textual-zone timestamps (RFC 2822 style) parse instead of being corrupted', () => {
+    // Round-3 Cubic: the round-2 Z-append corrupted valid textual-zone
+    // timestamps ('...GMT' + 'Z' = unparseable). Only offsetless ISO
+    // date-times get the designator; everything else parses as written.
+    const m = computeProjectCalibration(
+      project([
+        resolved('Mon, 01 Jun 2026 11:30:00 GMT', 2, -5),
+        resolved('2026-06-01T11:00:00.000Z', -4, -7),
+        resolved('2026-06-08T09:00:00.000Z', 6, -9),
+        resolved('2026-06-15T09:00:00.000Z', -7, -11)
+      ])
+    );
+    // RFC 2822 GMT == 11:30Z: order 11:00Z, GMT(11:30Z), 06-08, 06-15.
+    // Halves [-4,2] abs 3 | [6,-7] abs 6.5 -> delta 3.5 (parseable, not null).
+    const t = m.series.defendable.precisionTrend;
+    assert.equal(t.firstHalfCount, 2);
+    assert.equal(t.secondHalfCount, 2);
+    assert.equal(t.trendDelta, 3.5);
+    const h = computeCalibrationHistory(
+      project([
+        resolved('Mon, 01 Jun 2026 11:30:00 GMT', 2, -5),
+        resolved('2026-06-01T11:00:00.000Z', -4, -7),
+        resolved('2026-06-08T09:00:00.000Z', 6, -9),
+        resolved('2026-06-15T09:00:00.000Z', -7, -11)
+      ])
+    );
+    // newest-first: 06-15, 06-08, GMT(11:30Z), 11:00Z — the GMT entry is NOT
+    // misordered to the tail by a corrupted key.
+    assert.equal(h.entries[2].capturedAt, 'Mon, 01 Jun 2026 11:30:00 GMT');
+    assert.equal(h.entries[3].capturedAt, '2026-06-01T11:00:00.000Z');
+  });
   test('non-finite stored errors render as null, never fabricated', () => {
     const h = computeCalibrationHistory(
       project([
