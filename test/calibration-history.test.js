@@ -280,8 +280,10 @@ describe('calibration_history — single project', () => {
     const prevDir = process.env.PMO_PROJECTS_DIR;
     const origCwd = process.cwd();
     try {
-      delete process.env.PMO_PROJECTS_DIR;
-      process.chdir(path.join(import.meta.dirname, '..')); // repo root, default ./data
+      // Point at the repo's data dir explicitly: lib/projects.js captures
+      // its default from the cwd at module load, so chdir alone cannot
+      // retarget it when tests run from outside the repo root.
+      process.env.PMO_PROJECTS_DIR = path.join(import.meta.dirname, '..', 'data');
       const r = call(51, 'calibration_history', { projectId: '101' });
       assert.equal(r.result.isError, false);
       assert.equal(JSON.parse(r.result.content[0].text).status, 'no_trail');

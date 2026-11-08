@@ -16,7 +16,7 @@ Waffle is the staff.
 
 ```bash
 git clone <this repo> && cd pocketpmo-mcp   # no dependencies to install
-npm test                                     # 281 tests (needs Node ≥ 20.11 — see below)
+npm test                                     # 285 tests (needs Node ≥ 20.11 — see below)
 node demo/demo.mjs                           # end-to-end demo transcript
 ```
 
@@ -175,7 +175,7 @@ lib/calibration.js  calibration trail metrics (port of the app's calibrationMetr
 lib/projects.js     JSON export-file store (tolerant loader)
 data/               sample project fixture
 demo/demo.mjs       real-subprocess E2E demo → markdown transcript
-test/               281 tests (node:test, zero deps; run on Node ≥ 20.11)
+test/               285 tests (node:test, zero deps; run on Node ≥ 20.11)
 ```
 
 ## Roadmap

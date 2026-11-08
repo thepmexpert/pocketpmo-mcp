@@ -555,8 +555,11 @@ const HANDLERS = {
     const p = loadOrFail(args.projectId, 'projectId');
     const history = computeCalibrationHistory(p);
     return {
-      id: p.id ?? null,
-      name: p.name ?? null,
+      // Same displayString coercion as discovery/list_projects so a
+      // hand-edited truthy object in id or name cannot change the
+      // response shape.
+      id: p.id == null ? null : displayString(p.id),
+      name: displayString(p.name || p.id),
       ...history,
       entryCap: MAX_LISTED_ENTRIES,
       read_only: true

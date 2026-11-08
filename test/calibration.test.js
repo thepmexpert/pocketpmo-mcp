@@ -573,6 +573,44 @@ describe('computeCalibrationHistory — response record', () => {
     assert.equal(h.entries[4].capturedAt, '2026-06-01T12:00:00.000+01:00');
   });
 
+  test('trend split uses parse-normalized chronology (mixed offsets)', () => {
+    // 12:00+01:00 == 11:00Z is the OLDEST entry despite byte order sorting
+    // it newest; it must land in the FIRST half, not the second.
+    const m = computeProjectCalibration(
+      project([
+        resolved('2026-06-01T12:00:00.000+01:00', -9, -5),
+        resolved('2026-06-01T11:30:00.000Z', -1, -7),
+        resolved('2026-06-08T09:00:00.000Z', -6, -9)
+      ])
+    );
+    const t = m.series.defendable.precisionTrend;
+    // chronological halves: [-9(11:00Z), -1(11:30Z)] abs 5 | [-6] abs 6
+    assert.equal(t.firstHalfCount, 2);
+    assert.equal(t.secondHalfCount, 1);
+    assert.equal(t.trendDelta, 1);
+    // span reports the parse-normalized extremes
+    assert.equal(m.span.firstCapturedAt, '2026-06-01T12:00:00.000+01:00');
+    assert.equal(m.span.lastCapturedAt, '2026-06-08T09:00:00.000Z');
+  });
+
+  test('unparseable capturedAt weighs the trend LAST, agreeing with the listing', () => {
+    const m = computeProjectCalibration(
+      project([
+        resolved('banana', -2, -5),
+        resolved('2026-02-02T09:00:00.000Z', -4, -7),
+        resolved('2026-02-09T09:00:00.000Z', -6, -9),
+        resolved('2026-02-16T09:00:00.000Z', -8, -11)
+      ])
+    );
+    const t = m.series.defendable.precisionTrend;
+    // banana (garbage) sorts LAST: halves [-4,-6] abs 5 | [-8,-2] abs 5
+    // -> delta 0. Byte order would put banana FIRST: [-2,-4] abs 3 |
+    // [-6,-8] abs 7 -> delta 4. Asserting 0 pins the parse-normalized rule.
+    assert.equal(t.firstHalfCount, 2);
+    assert.equal(t.secondHalfCount, 2);
+    assert.equal(t.trendDelta, 0);
+  });
+
   test('non-finite stored errors render as null, never fabricated', () => {
     const h = computeCalibrationHistory(
       project([
