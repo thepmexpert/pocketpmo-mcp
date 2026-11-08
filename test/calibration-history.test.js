@@ -144,6 +144,34 @@ describe('calibration_history — discovery mode (no projectId)', () => {
     });
   });
 
+  test('empty projects dir yields an honest empty payload, never an error', () => {
+    withProjectsDir((dir) => {
+      // remove the seeded fixtures: directory now exists but has no exports
+      for (const f of fs.readdirSync(dir)) fs.unlinkSync(path.join(dir, f));
+      const r = call(47, 'calibration_history', {});
+      assert.equal(r.result.isError, false);
+      const payload = JSON.parse(r.result.content[0].text);
+      assert.deepEqual(payload.projects, []);
+      assert.deepEqual(payload.loadSkipped, []);
+      assert.equal(payload.read_only, true);
+    });
+  });
+
+  test('displayString hygiene: a truthy non-string name cannot leak a raw object', () => {
+    withProjectsDir((dir) => {
+      // hand-edited file with an object where a string belongs (the class
+      // list_projects already hardened against in CR round 5 on #13)
+      const p = noTrailProject();
+      p.name = { toString: null, evil: true };
+      fs.writeFileSync(path.join(dir, 'weird.json'), JSON.stringify(p));
+      const r = call(48, 'calibration_history', {});
+      const payload = JSON.parse(r.result.content[0].text);
+      const row = payload.projects.find((x) => x.file === 'weird.json');
+      assert.ok(typeof row.name === 'string', `name must be a string, got ${typeof row.name}`);
+      assert.ok(!row.name.includes('evil'));
+    });
+  });
+
   test('malformed neighbors are skipped and reported, never breaking good rows', () => {
     withProjectsDir((dir) => {
       fs.writeFileSync(path.join(dir, 'torn.json'), '{ torn');

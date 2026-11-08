@@ -223,16 +223,17 @@ describe('computeProjectCalibration — precision trend fixtures', () => {
   test('odd count: FIRST half gets the extra element (3 entries -> 2/1)', () => {
     const m = computeProjectCalibration(
       project([
-        resolved('2026-02-02T09:00:00.000Z', -2, -5),
-        resolved('2026-02-09T09:00:00.000Z', -4, -7),
+        resolved('2026-02-02T09:00:00.000Z', -9, -5),
+        resolved('2026-02-09T09:00:00.000Z', -1, -7),
         resolved('2026-02-16T09:00:00.000Z', -6, -9)
       ])
     );
     const t = m.series.defendable.precisionTrend;
     assert.equal(t.firstHalfCount, 2);
     assert.equal(t.secondHalfCount, 1);
-    // firstHalf [-2,-4] abs mean 3; secondHalf [-6] abs 6; delta +3
-    assert.equal(t.trendDelta, 3);
+    // Split-swap-sensitive: firstHalf [-9,-1] abs mean 5; secondHalf [-6]
+    // abs 6 -> delta +1. A swapped split would give 9 vs 3.5 -> -5.5.
+    assert.equal(t.trendDelta, 1);
     assert.equal(t.trendIsNoisy, true); // count 3 < 6
   });
 
@@ -511,6 +512,16 @@ describe('computeCalibrationHistory — response record', () => {
     // invalid overrides fall back to the default cap
     const h2 = computeCalibrationHistory(late, { maxEntries: 0 });
     assert.equal(h2.entries.length, 4);
+    // gate finding: full invalid-override table
+    for (const bad of [-3, NaN, Infinity, -Infinity, '5', null]) {
+      const h3 = computeCalibrationHistory(late, { maxEntries: bad });
+      assert.equal(h3.entries.length, 4, `override ${String(bad)} must fall back to default`);
+      // entryCap itself is added by the server response layer, not here
+    }
+    // fractional values are valid and floor (1.5 -> 1, 2.9 -> 2)
+    assert.equal(computeCalibrationHistory(late, { maxEntries: 1.5 }).entries.length, 1);
+    const h4 = computeCalibrationHistory(late, { maxEntries: 2.9 });
+    assert.equal(h4.entries.length, 2);
   });
 
   test('garbage capturedAt entries sort last in the newest-first list', () => {
@@ -525,6 +536,41 @@ describe('computeCalibrationHistory — response record', () => {
     assert.equal(h.entries[0].capturedAt, '2026-01-19T09:00:00.000Z');
     assert.equal(h.entries[1].capturedAt, '2026-01-12T09:00:00.000Z');
     assert.equal(h.entries[2].capturedAt, null); // garbage rendered honestly
+  });
+
+  test('non-ISO string capturedAt sorts LAST too (gate finding: banana must not win)', () => {
+    // Pre-fix, 'banana' byte-sorted ABOVE every ISO timestamp and presented
+    // itself as the most recent entry. Parse-normalized keys fix that.
+    const h = computeCalibrationHistory(
+      project([
+        resolved('banana', 5, 5),
+        resolved('2026-01-12T09:00:00.000Z', 3, 2),
+        resolved('2026-01-19T09:00:00.000Z', 7, 10)
+      ])
+    );
+    assert.equal(h.entries[0].capturedAt, '2026-01-19T09:00:00.000Z');
+    assert.equal(h.entries[1].capturedAt, '2026-01-12T09:00:00.000Z');
+    assert.equal(h.entries[2].capturedAt, 'banana'); // rendered honestly, sorted last
+  });
+
+  test('mixed UTC offsets sort chronologically in the listing (Date.parse keys)', () => {
+    // 12:00+01:00 == 11:00Z, which is EARLIER than 11:30Z despite byte order
+    const h = computeCalibrationHistory(
+      project([
+        resolved('2026-06-01T12:00:00.000+01:00', 1, 1),
+        resolved('2026-06-01T11:30:00.000Z', 2, 2),
+        resolved('2026-06-08T09:00:00.000Z', 3, 3),
+        resolved('2026-06-15T09:00:00.000Z', 4, 4),
+        resolved('2026-06-22T09:00:00.000Z', 5, 5)
+      ])
+    );
+    // ready gate needs >= 3 usable; newest first, epoch-normalized keys
+    assert.equal(h.status, 'ready');
+    assert.equal(h.entries[0].capturedAt, '2026-06-22T09:00:00.000Z');
+    assert.equal(h.entries[1].capturedAt, '2026-06-15T09:00:00.000Z');
+    assert.equal(h.entries[2].capturedAt, '2026-06-08T09:00:00.000Z');
+    assert.equal(h.entries[3].capturedAt, '2026-06-01T11:30:00.000Z');
+    assert.equal(h.entries[4].capturedAt, '2026-06-01T12:00:00.000+01:00');
   });
 
   test('non-finite stored errors render as null, never fabricated', () => {

@@ -31,7 +31,7 @@ import {
   computeCalibrationHistory,
   MAX_LISTED_ENTRIES
 } from './lib/calibration.js';
-import { loadAllProjects, listProjects, getProject, projectsDir } from './lib/projects.js';
+import { loadAllProjects, listProjects, getProject, projectsDir, displayString } from './lib/projects.js';
 
 const SERVER_INFO = { name: 'pocketpmo-mcp', version: '0.1.0' };
 const PROTOCOL_VERSION = '2025-06-18';
@@ -524,8 +524,11 @@ const HANDLERS = {
       const { skippedFiles, failedFiles, warnings, fatal } = loadAllProjects((project, file) => {
         const summary = readTrailSummary(project);
         projects.push({
-          id: project.id ?? null,
-          name: project.name ?? project.id ?? null,
+          // displayString coercion matches list_projects byte-for-byte:
+          // truthy non-string names (hand-edited files) must not leak raw
+          // JSON objects into the payload.
+          id: displayString(project.id),
+          name: displayString(project.name || project.id),
           file,
           status: summary.status,
           resolvedCount: summary.resolvedCount,
