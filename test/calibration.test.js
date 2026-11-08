@@ -673,6 +673,44 @@ describe('computeCalibrationHistory — response record', () => {
     assert.equal(m.span.lastCapturedAt, '2026-06-22T09:00:00.000Z');
   });
 
+  test('single-digit slash timestamps normalize to UTC too', () => {
+    const m = computeProjectCalibration(
+      project([
+        resolved('2026/6/1 11:30', 2, -5),
+        resolved('2026-06-01T11:00:00.000Z', -4, -7),
+        resolved('2026-06-08T09:00:00.000Z', 6, -9),
+        resolved('2026-06-15T09:00:00.000Z', -7, -11)
+      ])
+    );
+    // UTC order: 06-01 11:00Z, 06-01 11:30 (slash), 06-08, 06-15.
+    // Halves [-4,2] abs 3 | [6,-7] abs 6.5 -> delta 3.5, any host.
+    const t = m.series.defendable.precisionTrend;
+    assert.equal(t.firstHalfCount, 2);
+    assert.equal(t.secondHalfCount, 2);
+    assert.equal(t.trendDelta, 3.5);
+  });
+
+  test('a TZ shift moves an offsetless entry ACROSS the trend split (boundary fixture)', () => {
+    // A=22:00 offsetless sits just before B=23:00Z. Normalized (UTC):
+    // order X,A,B,D -> halves [X,A] | [B,D] -> delta 0. If the entry were
+    // parsed as LOCAL time in UTC-07:00 it becomes June 2 05:00Z and jumps
+    // AFTER B: order X,B,A,D -> halves [X,B] | [A,D] -> delta -2.
+    // Asserting 0 pins the UTC pinning rule in every host timezone.
+    const m = computeProjectCalibration(
+      project([
+        resolved('2026-05-01T09:00:00.000Z', 8, -5),
+        resolved('2026-06-01T22:00', -2, -7),
+        resolved('2026-06-01T23:00:00.000Z', -4, -9),
+        resolved('2026-07-01T09:00:00.000Z', -6, -11)
+      ])
+    );
+    const t = m.series.defendable.precisionTrend;
+    assert.equal(t.firstHalfCount, 2);
+    assert.equal(t.secondHalfCount, 2);
+    assert.equal(t.trendDelta, 0);
+    assert.equal(m.span.firstCapturedAt, '2026-05-01T09:00:00.000Z');
+  });
+
   test('textual-zone timestamps (RFC 2822 style) parse instead of being corrupted', () => {
     // Round-3 Cubic: the round-2 Z-append corrupted valid textual-zone
     // timestamps ('...GMT' + 'Z' = unparseable). Only offsetless ISO
