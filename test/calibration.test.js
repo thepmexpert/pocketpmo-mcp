@@ -538,19 +538,21 @@ describe('computeCalibrationHistory — response record', () => {
     assert.equal(h.entries[2].capturedAt, null); // garbage rendered honestly
   });
 
-  test('non-ISO string capturedAt sorts LAST too (gate finding: banana must not win)', () => {
-    // Pre-fix, 'banana' byte-sorted ABOVE every ISO timestamp and presented
-    // itself as the most recent entry. Parse-normalized keys fix that.
+  test('non-ISO string capturedAt sorts LAST too (gate finding: garbage must not win)', () => {
+    // '!garbage' byte-sorts BEFORE '2026-...' so the OLD byte-order rule
+    // presented it as the most recent entry; parse-normalized keys fix that.
+    // (Cubic round 2: 'banana' did not distinguish the rules — it byte-sorts
+    // last anyway. '!garbage' fails under the old comparator.)
     const h = computeCalibrationHistory(
       project([
-        resolved('banana', 5, 5),
+        resolved('!garbage', 5, 5),
         resolved('2026-01-12T09:00:00.000Z', 3, 2),
         resolved('2026-01-19T09:00:00.000Z', 7, 10)
       ])
     );
     assert.equal(h.entries[0].capturedAt, '2026-01-19T09:00:00.000Z');
     assert.equal(h.entries[1].capturedAt, '2026-01-12T09:00:00.000Z');
-    assert.equal(h.entries[2].capturedAt, 'banana'); // rendered honestly, sorted last
+    assert.equal(h.entries[2].capturedAt, '!garbage'); // rendered honestly, sorted last
   });
 
   test('mixed UTC offsets sort chronologically in the listing (Date.parse keys)', () => {
@@ -573,24 +575,46 @@ describe('computeCalibrationHistory — response record', () => {
     assert.equal(h.entries[4].capturedAt, '2026-06-01T12:00:00.000+01:00');
   });
 
-  test('trend split uses parse-normalized chronology (mixed offsets)', () => {
-    // 12:00+01:00 == 11:00Z is the OLDEST entry despite byte order sorting
-    // it newest; it must land in the FIRST half, not the second.
+  test('trend split uses parse-normalized chronology (offset pair straddles the half boundary)', () => {
+    // A(11:00Z via +01:00 offset), E(11:15Z), B(11:30Z), D(06-08).
+    // PARSE order halves: [A,E] abs mean 6.5 | [B,D] abs mean 6 -> delta -0.5.
+    // BYTE order halves: [E,B] abs mean 4.5 | [A,D] abs mean 8 -> delta +3.5.
+    // Only the parse-normalized rule gives -0.5; the old comparator gave 3.5.
     const m = computeProjectCalibration(
       project([
-        resolved('2026-06-01T12:00:00.000+01:00', -9, -5),
-        resolved('2026-06-01T11:30:00.000Z', -1, -7),
-        resolved('2026-06-08T09:00:00.000Z', -6, -9)
+        resolved('2026-06-01T12:00:00.000+01:00', 9, -5),
+        resolved('2026-06-01T11:15:00.000Z', -4, -7),
+        resolved('2026-06-01T11:30:00.000Z', 5, -9),
+        resolved('2026-06-08T09:00:00.000Z', -7, -11)
       ])
     );
     const t = m.series.defendable.precisionTrend;
-    // chronological halves: [-9(11:00Z), -1(11:30Z)] abs 5 | [-6] abs 6
     assert.equal(t.firstHalfCount, 2);
-    assert.equal(t.secondHalfCount, 1);
-    assert.equal(t.trendDelta, 1);
+    assert.equal(t.secondHalfCount, 2);
+    assert.equal(t.trendDelta, -0.5);
     // span reports the parse-normalized extremes
     assert.equal(m.span.firstCapturedAt, '2026-06-01T12:00:00.000+01:00');
     assert.equal(m.span.lastCapturedAt, '2026-06-08T09:00:00.000Z');
+  });
+
+  test('offsetless timestamps interpret as UTC (host-independent ordering)', () => {
+    // Date.parse('2026-06-01T11:30:00') is LOCAL time without a zone, which
+    // differs per host; the key helper appends Z so every host agrees.
+    const m = computeProjectCalibration(
+      project([
+        resolved('2026-06-01T11:30:00', 3, -5),        // offsetless -> UTC
+        resolved('2026-06-01T11:00:00.000Z', -4, -7),
+        resolved('2026-06-08T09:00:00.000Z', 5, -9),
+        resolved('2026-06-15T09:00:00.000Z', -7, -11)
+      ])
+    );
+    // UTC order: 11:00Z < 11:30 < 06-08 < 06-15. Halves [3,-4] abs 3.5 |
+    // [5,-7] abs 6 -> delta 2.5 regardless of the host's timezone.
+    const t = m.series.defendable.precisionTrend;
+    assert.equal(t.firstHalfCount, 2);
+    assert.equal(t.secondHalfCount, 2);
+    assert.equal(t.trendDelta, 2.5);
+    assert.equal(m.span.firstCapturedAt, '2026-06-01T11:00:00.000Z');
   });
 
   test('unparseable capturedAt weighs the trend LAST, agreeing with the listing', () => {
