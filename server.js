@@ -26,7 +26,12 @@ import {
   round2
 } from './lib/calculators.js';
 import { createPortfolioFold } from './lib/portfolio.js';
-import { loadAllProjects, listProjects, getProject, projectsDir } from './lib/projects.js';
+import {
+  readTrailSummary,
+  computeCalibrationHistory,
+  MAX_LISTED_ENTRIES
+} from './lib/calibration.js';
+import { loadAllProjects, listProjects, getProject, projectsDir, displayString } from './lib/projects.js';
 
 const SERVER_INFO = { name: 'pocketpmo-mcp', version: '0.1.0' };
 const PROTOCOL_VERSION = '2025-06-18';
@@ -177,6 +182,21 @@ const TOOLS = [
       properties: { project: { type: 'string' } },
       required: ['project']
     }
+  },
+  {
+    name: 'calibration_history',
+    description:
+      'Read a project\'s own forecast-vs-actual record (its calibration trail) used for coaching: week by week, whether resolved finish forecasts landed late or early against the actual finish date, by how many whole days, and whether the gap is shrinking over time. Without projectId, lists every project\'s trail status (no_trail / insufficient_data / ready) with open and resolved counts so you can discover what is coachable. Honesty contract: fewer than 3 usable resolved entries is insufficient_data with no numeric claims; entries with missing, malformed, or impossible dates are excluded and the exclusion is reported, never scored. This is the project\'s own recorded history — no ratings, no peer comparison.',
+    annotations: READ_ONLY_ANNOTATIONS,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        projectId: {
+          type: 'string',
+          description: 'Project id or name; omit to list trail status for every project'
+        }
+      }
+    }
   }
 ];
 
@@ -192,14 +212,16 @@ const TOOLS = [
 // and a generic message in-band.
 class DomainError extends Error {}
 
-function loadOrFail(idOrName) {
+function loadOrFail(idOrName, paramName = 'project') {
   // §4.1: reject non-string project args with a field+type error BEFORE any
   // lookup. The old coercion turned {x:1} into a "[object Object]" lookup —
   // inert, but a project literally named "[object Object]" could match, and
-  // the error named neither the field nor the expected type.
+  // the error named neither the field nor the expected type. The param name
+  // rides along so tools with a differently-named id parameter (e.g.
+  // calibration_history's optional `projectId`) still name their own field.
   if (typeof idOrName !== 'string') {
     throw new DomainError(
-      `invalid parameter 'project': expected a string, received ${idOrName === null ? 'null' : typeof idOrName}`
+      `invalid parameter '${paramName}': expected a string, received ${idOrName === null ? 'null' : typeof idOrName}`
     );
   }
   const { project, error } = getProject(idOrName);
@@ -490,6 +512,58 @@ const HANDLERS = {
       }))
       .sort((a, b) => (b.score ?? -1) - (a.score ?? -1));
     return { project: p.name, risks, read_only: true };
+  },
+
+  calibration_history(args) {
+    // Discovery mode: one row per project across the repository, streamed
+    // via loadAllProjects (rows are bounded metadata — the parsed bodies
+    // are never retained). Malformed neighbors are skipped and reported by
+    // the loader; they cannot break a good project's row.
+    if (args.projectId === undefined || args.projectId === null) {
+      const projects = [];
+      const { skippedFiles, failedFiles, warnings, fatal } = loadAllProjects((project, file) => {
+        const summary = readTrailSummary(project);
+        projects.push({
+          // displayString coercion matches list_projects byte-for-byte:
+          // truthy non-string names (hand-edited files) must not leak raw
+          // JSON objects into the payload.
+          id: displayString(project.id),
+          name: displayString(project.name || project.id),
+          file,
+          status: summary.status,
+          resolvedCount: summary.resolvedCount,
+          openCount: summary.openCount,
+          excludedCount: summary.excludedCount
+        });
+      });
+      if (fatal) {
+        throw new DomainError(fatal);
+      }
+      return {
+        projects,
+        loadSkipped: [
+          ...skippedFiles.map((file) => ({ file, reason: 'invalid or unreadable' })),
+          ...failedFiles.map((file) => ({ file, reason: 'analysis error' }))
+        ],
+        warnings,
+        read_only: true
+      };
+    }
+
+    // Single-project mode: full record. Same id-or-name resolution and
+    // unknown-id error convention as every other per-project tool.
+    const p = loadOrFail(args.projectId, 'projectId');
+    const history = computeCalibrationHistory(p);
+    return {
+      // Same displayString coercion as discovery/list_projects so a
+      // hand-edited truthy object in id or name cannot change the
+      // response shape.
+      id: p.id == null ? null : displayString(p.id),
+      name: displayString(p.name || p.id),
+      ...history,
+      entryCap: MAX_LISTED_ENTRIES,
+      read_only: true
+    };
   }
 };
 

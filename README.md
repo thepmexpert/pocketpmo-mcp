@@ -16,7 +16,7 @@ Waffle is the staff.
 
 ```bash
 git clone <this repo> && cd pocketpmo-mcp   # no dependencies to install
-npm test                                     # 235 tests (needs Node ≥ 20.11 — see below)
+npm test                                     # 293 tests (needs Node ≥ 20.11 — see below)
 node demo/demo.mjs                           # end-to-end demo transcript
 ```
 
@@ -51,6 +51,7 @@ skipped with a warning; the server never crashes on bad input.
 | `evm_metrics` | `project`, `statusDate?` | PV, EV, AC, CPI, SPI, EAC, VAC, timeline % (EAC/VAC null when CPI can't be computed, e.g. AC=0 or EV=0) |
 | `portfolio_rollup` | `statusDate?` | cross-project PERT totals + EVM aggregates over ALL projects; projects that fail to load or carry no data are skipped and reported. Independence assumed; CPI/SPI computed from summed EV/AC/PV, never averaged from project indices; PERT + EVM only (no Monte Carlo) |
 | `risk_register` | `project` | risks scored P×I, ranked |
+| `calibration_history` | `projectId?` | the project's own forecast-vs-actual record used for coaching: trail status (no_trail / insufficient_data / ready), bias label, per-series signed/absolute error means, precision trend, resolved entries newest-first (capped at 20). Omit `projectId` for a per-project status list. Fewer than 3 usable resolved entries is `insufficient_data` with no numeric claims; entries with missing or impossible dates are excluded and reported, never scored. No ratings, no peer comparison |
 
 Design guarantees:
 
@@ -63,6 +64,26 @@ Design guarantees:
 - **Faithful semantics** — the calculators are ports of the app's
   `pertCalculator`, `cpmCalculator`, `monteCarloEngine`, `evmCalculator`;
   each documents its source function in `lib/calculators.js`.
+
+## Calibration history
+
+`calibration_history` reads the calibration trail the app records on each
+project (weekly finish forecasts and, once a week resolves, the actual
+finish date and the signed whole-day errors against it). It is the
+project's own forecast-vs-actual record used for coaching — no scores, no
+ratings, no peer comparison.
+
+The lib (`lib/calibration.js`) is a port of the app's
+`calibrationMetrics.js` and mirrors its semantics exactly: entries are
+usable only when resolved with a real calendar `actualFinishDate`
+(impossible dates like `2026-02-30` are excluded, and the exclusion is
+reported); the `defendable` and `promised` series are computed
+independently over the entries that recorded each forecast type; fewer
+than 3 usable entries is an explicit `insufficient_data` with no numeric
+claims; a non-finite stored error is excluded from its series, never
+propagated. Older exports without a `calibrationTrail` key read as an
+honest `no_trail` status, never an error. The entry list in a response is
+capped at 20 (newest first) and the cap is reported.
 
 ## Register with Hermes
 
@@ -94,7 +115,7 @@ Restart Hermes; tools appear as `mcp_pocketpmo_list_projects`, etc.
 
 ## Waffle OS agent packs
 
-The `pmo-analyst` pack declares all 8 tools in `tools/mcp.servers.json`
+The `pmo-analyst` pack declares all 9 tools in `tools/mcp.servers.json`
 (`origin: "mcp:pocketpmo"`, `x-waffle.read_only: true`) and consumes them via
 its `pocketpmo-forecast-query` skill. Other PM-domain packs
 (portfolio-pmo-manager, project-controls-lead, senior-project-manager,
@@ -148,12 +169,13 @@ to the app-port `cpmNetwork` by a randomized equivalence test.
 ## Architecture
 
 ```
-server.js           MCP framing (initialize/ping/tools/list/tools/call) + 8 handlers
+server.js           MCP framing (initialize/ping/tools/list/tools/call) + 9 handlers
 lib/calculators.js  PERT · CPM · Monte Carlo · EVM (pure, documented ports)
+lib/calibration.js  calibration trail metrics (port of the app's calibrationMetrics.js)
 lib/projects.js     JSON export-file store (tolerant loader)
 data/               sample project fixture
 demo/demo.mjs       real-subprocess E2E demo → markdown transcript
-test/               235 tests (node:test, zero deps; run on Node ≥ 20.11)
+test/               293 tests (node:test, zero deps; run on Node ≥ 20.11)
 ```
 
 ## Roadmap
