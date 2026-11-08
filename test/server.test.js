@@ -35,9 +35,9 @@ describe('protocol', () => {
 });
 
 describe('tools', () => {
-  test('tools/list exposes 8 read-only tools', () => {
+  test('tools/list exposes 9 read-only tools', () => {
     const r = handleRequest(req(4, 'tools/list'));
-    assert.equal(r.result.tools.length, 8);
+    assert.equal(r.result.tools.length, 9);
     for (const t of r.result.tools) {
       assert.ok(t.name && t.description && t.inputSchema);
     }
